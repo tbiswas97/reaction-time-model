@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append("../src/")
+sys.path.append("./GSM_rsc_VGG_unity_project/src/")
 import import_utils
 import toolbox as tb
 import numpy as np
