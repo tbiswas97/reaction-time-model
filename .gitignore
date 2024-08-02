@@ -2,5 +2,8 @@
 *.pdf
 *.ipynb
 *.csv
+*.pkl
+__pycache__/
+.DS_Store
 data/
 
