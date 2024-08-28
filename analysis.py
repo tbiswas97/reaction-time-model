@@ -9,6 +9,23 @@ import toolbox as tb
 
 
 def _get_psame_t(coord1, coord2, pmap):
+    """
+    Given two coordinates and a EM segmentation probability map:
+
+    Parameters:
+    ------------
+    coord1 : int coord2 : int
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations
+        n_components : number of components in mixture
+        ny : height of image
+        nx : width of image
+
+    Returns:
+    ------------
+    psame_t : ndarray of float length n_iter
+    seg_flag : ndarray of bool of length n_iter
+    """
 
     n_iter = pmap.shape[0]
 
@@ -29,6 +46,26 @@ def _get_psame_t(coord1, coord2, pmap):
 
 
 def get_logits(pair, pmap):
+    """
+    Given an EM segmentation probability map, returns the log odds of the
+    probability of the pair being in the same segment (p_same)
+
+    log odds = log((p_same)/(1-p_same))
+
+    Parameters:
+    -----------
+    pair : tup or tup-like
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations
+        n_components : number of components in mixture
+        ny : height of image
+        nx : width of image
+
+    Returns:
+    --------
+    logit : ndarray of float of length n_iter
+    """
+    # uses only the first output of analysis._get_psame_t
     p, _ = _get_psame_t(pair[0], pair[1], pmap)
     logit = np.log((p) / (1 - p))
 
@@ -36,12 +73,60 @@ def get_logits(pair, pmap):
 
 
 def get_final_segmentation_assignment(pair, pmap):
+    """
+    Given an EM segmentation probability map, returns whether a pair of pixels n
+    and m are given then same segmentation assignment.
+
+    segmentation assignment = (argmax(p(n=k)) == argmax(p(m==k))
+
+    Parameters:
+    -----------
+    pair : tup or tup-like pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations n_components : number of components in
+        mixture ny : height of image nx : width of image
+
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations n_components : number of components in
+        mixture ny : height of image nx : width of image
+
+    Returns:
+    --------
+    sf : ndarray of bool of length n_iter
+    """
     _, sf = _get_psame_t(pair[0], pair[1], pmap)
 
     return sf[-1]
 
 
 def get_model_reaction_time(pair, pmap, decision_bounds):
+    """
+    Given an EM segmentation probability map, returns the model's decision
+    "reaction time" for how long it takes to accumulate evidence that a pair is
+    in the same or different segment.
+
+    if log odds > decision_bounds the decision is made, the EM iteration where
+    this first occurs is the "reaction time"
+
+    Parameters:
+    -----------
+    pair : tup or tup-like
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations
+        n_components : number of components in mixture
+        ny : height of image
+        nx : width of image
+    decision_bounds : tup of float
+        if (log odds > decision_bounds[1] or
+            log odds < decision_bounds[0]):
+
+            the decision is made and the EM iteration index is returned as rt
+    Returns:
+    --------
+    rt : int
+
+    """
+    assert len(decision_bounds) == 2
+
     logits = get_logits(pair, pmap)
     seg_flag = get_final_segmentation_assignment(pair, pmap)
 
@@ -60,6 +145,28 @@ def get_model_reaction_time(pair, pmap, decision_bounds):
 
 
 def get_bin(_bin, pairs, reaction_times=None, responses=None):
+    """
+    Given a list of pairs calculates all distances between them and bins these
+    distances into n_bins bins
+
+    Parameters:
+    -----------
+    _bin : int
+        the bin at which to gather data, must be positive
+    pairs : list of tup or tup-like
+        the pairs to consider
+    reaction_times : list
+        provided as a field in Response class
+    responses : list
+        provided as a field in Response class
+
+    Returns:
+    ---------
+    d : dict
+        A dictionary with the information from a specific bin as specified by
+        _bin parameter
+    """
+
     distances = np.asarray(
         [
             tb.euclidean_distance(pairs[pair][0], pairs[pair][1])
@@ -95,7 +202,32 @@ def get_bin(_bin, pairs, reaction_times=None, responses=None):
 def _get_bin_df(
     _bin, pairs, pmap, reaction_times=None, responses=None, decision_bounds=None
 ):
+    """
+    Given a list of pairs calculates all distances between them, bins these
+    distances into n_bins bins, and outputs a DataFrame which includes Model information as well
 
+    Parameters:
+    -----------
+    _bin : int
+        the bin at which to gather data, must be positive
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations
+        n_components : number of components in mixture
+        ny : height of image
+        nx : width of image
+    pairs : list of tup or tup-like
+        the pairs to consider
+    reaction_times : list
+        provided as a field in Response class
+    responses : list
+        provided as a field in Response class
+
+    Returns:
+    ---------
+    df : pd.DataFrame
+        A DataFrame with the information from a specific bin as specified by
+        _bin parameter
+    """
     d = get_bin(_bin, pairs, reaction_times, responses)
 
     pairs_binned = d["pairs"]
@@ -116,6 +248,9 @@ def _get_bin_df(
         decision_bounds = decision_bounds
     else:
         decision_bounds = (-5, 5)
+
+    logits = [get_logits(pair, pmap) for pair in pairs_binned]
+
     rt = [get_model_reaction_time(pair, pmap, decision_bounds) for pair in pairs_binned]
     seg_flag = [get_final_segmentation_assignment(pair, pmap) for pair in pairs_binned]
 
@@ -131,7 +266,12 @@ def _get_bin_df(
         "responses": responses,
     }
 
+    d_logit = {"logit_{}".format(i): logits[i] for i in range(len(logits))}
+
     df = pd.DataFrame.from_dict(d)
+    df_log = pd.DataFrame.from_dict(d_logit)
+
+    df = pd.concat([df, df_log], axis=1)
 
     return df
 
@@ -145,6 +285,42 @@ def get_df(
     decision_bounds=None,
     condition=None,
 ):
+    """
+    Wrapper around _get_bin_df, which performs that function for every bin
+    in bins
+
+    Parameters:
+    -----------
+    pairs : list of tup or tup-like
+        the pairs to consider
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations n_components : number of components
+        in mixture ny : height of image nx : width of image
+    reaction_times : list
+        provided as a field in Response class
+    responses : list
+        provided as a field in Response class
+    bins : iterable of int
+        range(N) specifies the number of bins
+    decision_bounds : tup of float
+        Passed to above get_model_reaction_time function
+        if (log odds >
+        decision_bounds[1] or
+            log odds < decision_bounds[0]):
+
+            the decision is made and the EM iteration index is returned as
+            rt
+    condition : str
+        Input that notes the particular conditions for that experiment. A
+        tag that is associated with each dataframe as an identifier (eg.
+        Voronoi prior condition vs. Random prior condition)
+
+    Returns:
+    ---------
+    df : pd.DataFrame
+        A DataFrame with the information from a specific bin as specified by
+        _bin parameter
+    """
     if decision_bounds is not None:
         decision_bounds = decision_bounds
     else:
