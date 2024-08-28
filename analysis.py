@@ -83,20 +83,20 @@ def get_bin(_bin, pairs, reaction_times=None, responses=None):
         cond = (distances > 0) & (distances < edges[0])
     else:
         cond = (distances > edges[_bin - 1]) & (distances < edges[_bin])
-    
-    keys = ["pairs","distances","reaction_times","responses"]
-    values = [pairs,distances,reaction_times,responses] 
 
-    d = {k:v[cond] for k,v in zip(keys,values) if v is not None}
+    keys = ["pairs", "distances", "reaction_times", "responses"]
+    values = [pairs, distances, reaction_times, responses]
 
-    return d 
+    d = {k: v[cond] for k, v in zip(keys, values) if v is not None}
+
+    return d
 
 
 def _get_bin_df(
     _bin, pairs, pmap, reaction_times=None, responses=None, decision_bounds=None
 ):
 
-    d = get_bin(_bin,pairs,reaction_times,responses)
+    d = get_bin(_bin, pairs, reaction_times, responses)
 
     pairs_binned = d["pairs"]
     distances = d["distances"]
@@ -106,7 +106,6 @@ def _get_bin_df(
     if responses is not None:
         responses = d["responses"]
         responses = [response for response in responses]
-
 
     pairs_binned = [pair for pair in pairs_binned]
     distances = [dist for dist in distances]
@@ -129,7 +128,7 @@ def _get_bin_df(
         "model_rt": rt,
         "rt": reaction_times,
         "seg_flag": seg_flag,
-        "responses":responses
+        "responses": responses,
     }
 
     df = pd.DataFrame.from_dict(d)
