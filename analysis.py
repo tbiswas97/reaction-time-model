@@ -98,7 +98,7 @@ def get_final_segmentation_assignment(pair, pmap):
     return sf[-1]
 
 
-def get_model_reaction_time(pair, pmap, decision_bounds):
+def get_model_reaction_time(pair, pmap, decision_bounds, evidence="first"):
     """
     Given an EM segmentation probability map, returns the model's decision
     "reaction time" for how long it takes to accumulate evidence that a pair is
@@ -109,38 +109,46 @@ def get_model_reaction_time(pair, pmap, decision_bounds):
 
     Parameters:
     -----------
-    pair : tup or tup-like
-    pmap : ndarray of shape (n_iter,n_components,ny,nx)
-        n_iter : number of EM iterations
-        n_components : number of components in mixture
-        ny : height of image
-        nx : width of image
+    pair : tup or tup-like pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations n_components : number of components in
+        mixture ny : height of image nx : width of image
     decision_bounds : tup of float
         if (log odds > decision_bounds[1] or
             log odds < decision_bounds[0]):
 
             the decision is made and the EM iteration index is returned as rt
+    evidence : str
+        Defines what kind of evidence will be used in determining the reaction
+        time:
+            "first" : evidence is the first time the accumulation curve crosses
+                the decision boundary
+            "area" : evidence is the area underneath the
+                accumulation curve
     Returns:
     --------
-    rt : int
+    rt : int or float
 
     """
-    assert len(decision_bounds) == 2
-
+    # returns logit at each EM iteration
     logits = get_logits(pair, pmap)
-    seg_flag = get_final_segmentation_assignment(pair, pmap)
-
-    if seg_flag:
-        try:
-            rt = np.where(logits > decision_bounds[1])[0][0]
-        except:
-            rt = np.nan
-    else:
-        try:
-            rt = np.where(logits < decision_bounds[0])[0][0]
-        except:
-            rt = np.nan
-
+    if evidence == "first":
+        assert len(decision_bounds) == 2
+        seg_flag = get_final_segmentation_assignment(pair, pmap)
+        if seg_flag:
+            try:
+                rt = np.where(logits > decision_bounds[1])[0][0]
+            except:
+                rt = np.nan
+        else:
+            try:
+                rt = np.where(logits < decision_bounds[0])[0][0]
+            except:
+                rt = np.nan
+    elif evidence == "area":
+        rt = -1 * np.log(np.sum((abs(logits))))
+        # rt = 1 / (np.sum(abs(logits)))
+        # just use sum instead of area?
+        # rt = np.trapz(abs_v)
     return rt
 
 
@@ -200,7 +208,13 @@ def get_bin(_bin, pairs, reaction_times=None, responses=None):
 
 
 def _get_bin_df(
-    _bin, pairs, pmap, reaction_times=None, responses=None, decision_bounds=None
+    _bin,
+    pairs,
+    pmap,
+    reaction_times=None,
+    responses=None,
+    decision_bounds=None,
+    evidence="first",
 ):
     """
     Given a list of pairs calculates all distances between them, bins these
@@ -251,7 +265,10 @@ def _get_bin_df(
 
     logits = [get_logits(pair, pmap) for pair in pairs_binned]
 
-    rt = [get_model_reaction_time(pair, pmap, decision_bounds) for pair in pairs_binned]
+    rt = [
+        get_model_reaction_time(pair, pmap, decision_bounds, evidence=evidence)
+        for pair in pairs_binned
+    ]
     seg_flag = [get_final_segmentation_assignment(pair, pmap) for pair in pairs_binned]
 
     d = {
@@ -283,6 +300,7 @@ def get_df(
     responses=None,
     bins=range(1, 10),
     decision_bounds=None,
+    evidence="first",
     condition=None,
 ):
     """
@@ -334,6 +352,7 @@ def get_df(
                 reaction_times=reaction_times,
                 responses=responses,
                 decision_bounds=decision_bounds,
+                evidence=evidence,
             )
             for _bin in bins
         ],
