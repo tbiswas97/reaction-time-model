@@ -20,7 +20,8 @@ def _df_from_file(
     use_rt=True,
     voronoi_prior=None,
     random_prior=None,
-    spatial_smoothing=True,
+    evidence="first",
+    spatial_smoothing=1,
     trial_idx=0,
 ):
     """
@@ -38,13 +39,18 @@ def _df_from_file(
         must be the same shape as Response.image, used in em initial guess
     random_prior : np.ndarray
         must be the same shape as Response.image, used in em initial guess
-    spatial_smoothing : bool
-        if True, use spatial smoothing in EM
+    evidence : str
+        The method of calculating model reaction time, see
+        analysis.get_model_reaction_time()
+    spatial_smoothing : int
+        1 : spatial smoothing is active 0 : spatial smoothing is not used,
+            posterior probability for a regular mixture model is used instead
+        -1 : posterior class probability is used per pixel
     trial_idx : int
         Because the Voronoi prior and random prior are generated using RNG,
-        multiple trials with multiple initializations can be generated.
-        However, Kmeans initialization doesn't depend on RNG.
-        Therefore KMeans initialization only runs if trial_idx==0
+        multiple trials with multiple initializations can be generated. However,
+        Kmeans initialization doesn't depend on RNG. Therefore KMeans
+        initialization only runs if trial_idx==0
 
     Returns:
     --------
@@ -64,7 +70,7 @@ def _df_from_file(
     model = "c"
     k = R.kSeg
 
-    if spatial_smoothing:
+    if spatial_smoothing == 1:
         print("\tSpatial smoothing ON")
         print("\t\tSegmenting Voronoi... ")
         Voronoi.fit_model(
@@ -95,7 +101,7 @@ def _df_from_file(
             )
     else:
         print("\tSpatial smoothing OFF")
-        prior_weights = None
+        param = spatial_smoothing
         print("\t\tSegmenting Voronoi... ")
         Voronoi.fit_model(
             model=model,
@@ -104,7 +110,7 @@ def _df_from_file(
             keep=True,
             init=voronoi_prior,
             init_eps=0.05,
-            prior_weights=prior_weights,
+            spatial_smoothing=param,
         )
         print("\t\tSegmenting Random... ")
         Random.fit_model(
@@ -114,7 +120,7 @@ def _df_from_file(
             keep=True,
             init=random_prior,
             init_eps=0.1,
-            prior_weights=prior_weights,
+            spatial_smoothing=param,
         )
         if trial_idx == 0:
             print("\t\tSegmenting KMeans... ")
@@ -124,7 +130,7 @@ def _df_from_file(
                 layer_stop=1,
                 keep=True,
                 init=None,
-                prior_weights=prior_weights,
+                spatial_smoothing=-1,
             )
     # extract probability maps
     if trial_idx == 0:
@@ -147,7 +153,6 @@ def _df_from_file(
         pairs = R.get_tested_pairs()
         rts = None
         responses = None
-
     if trial_idx == 0:
         df = pd.concat(
             [
@@ -158,6 +163,7 @@ def _df_from_file(
                     reaction_times=rts,
                     responses=responses,
                     condition="voronoi",
+                    evidence=evidence,
                 ),
                 analysis.get_df(
                     pairs,
@@ -166,6 +172,7 @@ def _df_from_file(
                     reaction_times=rts,
                     responses=responses,
                     condition="random",
+                    evidence=evidence,
                 ),
                 analysis.get_df(
                     pairs,
@@ -174,6 +181,7 @@ def _df_from_file(
                     reaction_times=rts,
                     responses=responses,
                     condition="kmeans",
+                    evidence=evidence,
                 ),
             ],
             axis=0,
@@ -189,6 +197,7 @@ def _df_from_file(
                     reaction_times=rts,
                     responses=responses,
                     condition="voronoi",
+                    evidence=evidence,
                 ),
                 analysis.get_df(
                     pairs,
@@ -197,6 +206,7 @@ def _df_from_file(
                     reaction_times=rts,
                     responses=responses,
                     condition="random",
+                    evidence=evidence,
                 ),
             ]
         )
@@ -208,7 +218,9 @@ def _df_from_file(
     return df
 
 
-def df_from_file(file, decision_bounds=(-0.69, 0.69), use_rt=True, trial_idx=0):
+def df_from_file(
+    file, decision_bounds=(-0.69, 0.69), use_rt=True, trial_idx=0, evidence="first"
+):
     """
     Wrapper around _df_from_file that runs fits for Voronoi initialization,
     random initialization, and KMeans initialization with both spatial smoothing
@@ -222,6 +234,9 @@ def df_from_file(file, decision_bounds=(-0.69, 0.69), use_rt=True, trial_idx=0):
         used to calculated model reaction time
     use_rt : bool
         if True, get human reaction times from Response class
+    evidence : str
+        The method of calculating model reaction time, see
+        analysis.get_model_reaction_time()
     trial_idx : int
         Because the Voronoi prior and random prior are generated using RNG,
         multiple trials with multiple initializations can be generated. However,
@@ -240,33 +255,27 @@ def df_from_file(file, decision_bounds=(-0.69, 0.69), use_rt=True, trial_idx=0):
     vd = utils.generate_random_voronoi_prior(*R.image.shape[:2], R.kSeg, end_iter=0.05)
     print("\tGenerating random prior...")
     rand = utils.generate_random_prior(*R.image.shape[:2], R.kSeg)
-    df_smooth = _df_from_file(
-        R,
-        decision_bounds=decision_bounds,
-        use_rt=use_rt,
-        trial_idx=trial_idx,
-        spatial_smoothing=True,
-        voronoi_prior=vd,
-        random_prior=rand,
-    )
-    df_smooth["smoothness"] = 1
-    df_unsmooth = _df_from_file(
-        R,
-        decision_bounds=decision_bounds,
-        use_rt=use_rt,
-        trial_idx=trial_idx,
-        spatial_smoothing=False,
-        voronoi_prior=vd,
-        random_prior=rand,
-    )
-    df_unsmooth["smoothness"] = 0
+    dfs = []
+    for spatial_smoothing in [1, 0, -1]:
+        df = _df_from_file(
+            R,
+            decision_bounds=decision_bounds,
+            use_rt=use_rt,
+            trial_idx=trial_idx,
+            spatial_smoothing=spatial_smoothing,
+            voronoi_prior=vd,
+            random_prior=rand,
+            evidence=evidence,
+        )
+        df["smoothness"] = spatial_smoothing
+        dfs.append(df)
 
-    df_out = pd.concat([df_smooth, df_unsmooth], axis=0, ignore_index=True)
+    df_out = pd.concat(dfs, axis=0, ignore_index=True)
 
     return df_out
 
 
-def run_trials(file, n_trials):
+def run_trials(file, n_trials, evidence="first"):
     """
     Wrapper around df_from_file that runs that function multiple times
 
@@ -277,6 +286,7 @@ def run_trials(file, n_trials):
     n_trials : int
         The total number of trials to run, or, the total number of Voronoi and
         random priors generated using RNG per image
+
     Returns:
     --------
     df : pd.DataFrame
@@ -286,7 +296,7 @@ def run_trials(file, n_trials):
     for i in range(n_trials):
         print("File: {} | Trial {}".format(file, i))
         print("\t")
-        df = df_from_file(file, trial_idx=i)
+        df = df_from_file(file, trial_idx=i, evidence=evidence)
         df["trial"] = i
         dfs.append(df)
         print("\t")
@@ -295,7 +305,7 @@ def run_trials(file, n_trials):
     return out
 
 
-def run_all_files(files, n_trials=10):
+def run_all_files(files, n_trials=10, evidence="first"):
     """
     Wrapper around run_trials that runs that function for every file
 
@@ -311,7 +321,9 @@ def run_all_files(files, n_trials=10):
         df is of type generated by analysis.get_df()
     """
     out = pd.concat(
-        [run_trials(file, n_trials) for file in files], axis=0, ignore_index=True
+        [run_trials(file, n_trials, evidence=evidence) for file in files],
+        axis=0,
+        ignore_index=True,
     )
 
     return out
@@ -322,6 +334,6 @@ if __name__ == "__main__":
 
     files = ns(glob("data/*"))
 
-    df = run_all_files(files)
+    df = run_all_files(files, evidence="area")
 
-    df.to_csv("reaction_time_responses_model_all_files.csv")
+    df.to_csv("reaction_time_responses_log_area_model_smooth_test_all_files.csv")
