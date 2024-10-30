@@ -125,8 +125,7 @@ def get_SegMap_pmaps(SegMap, k):
     pmaps : np.ndarray
         shape (n_iter,k,width,height)
     """
-    weights = SegMap._res_iter.squeeze()[:, 1]
-
+    weights = SegMap._res_iter.T[0].squeeze()
     pmaps_per_iter = np.asarray(
         [
             weight.reshape((*SegMap.im.shape[:2], k))
