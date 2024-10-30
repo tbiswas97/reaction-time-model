@@ -120,14 +120,17 @@ def get_model_reaction_time(pair, pmap, decision_bounds, evidence="first"):
 
     Parameters:
     -----------
-    pair : tup or tup-like pmap : ndarray of shape (n_iter,n_components,ny,nx)
-        n_iter : number of EM iterations n_components : number of components in
-        mixture ny : height of image nx : width of image
+    pair : tup or tup-like
+    pmap : ndarray of shape (n_iter,n_components,ny,nx)
+        n_iter : number of EM iterations
+        n_components : number of components in
+            mixture
+        ny : height of image
+        nx : width of image
     decision_bounds : tup of float
         if (log odds > decision_bounds[1] or
             log odds < decision_bounds[0]):
-
-            the decision is made and the EM iteration index is returned as rt
+        the decision is made and the EM iteration index is returned as rt
     evidence : str
         Defines what kind of evidence will be used in determining the reaction
         time:
