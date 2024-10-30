@@ -6,7 +6,9 @@ import numpy as np
 
 # toolbox is imported from src
 import toolbox as tb
+import torch as tch
 import re
+from vseg.src.vseg import SegmentationMap as VSM
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
 
@@ -44,6 +46,7 @@ class Response:
         self.parse_filename()
         self.fields = list(d["data"].keys())
         self.subject = self.filename.split("_")[1]
+        self.is_fit = False
         return None
 
     def parse_filename(self):
@@ -163,11 +166,70 @@ class Response:
         else:
             pair_coords = _pair_coords
 
-        out = pair_coords
-
         if return_rt:
             # deprecated
             assert len(self.testedPairs) == len(self.reactionTime)
             out = (pair_coords, self.reactionTime)
 
         return pair_coords
+
+    def get_fit_data(self):
+        """
+        Extracts the data that is necessary to fit Vseg
+        """
+        resp = self.Response
+        tresp = tch.tensor(np.array(resp, float))
+
+        indtestedPairs = self.indtestedPairs
+        tindtestedPairs = tch.tensor(np.array(indtestedPairs, float))
+        tindtestedPairs = tindtestedPairs.reshape(resp.shape[0])
+        tindtestedPairs = tindtestedPairs.long()
+
+        xGrid = self.xGrid
+        yGrid = self.yGrid
+
+        nGrid = int((xGrid.shape[0]) ** (0.5))
+        n_seg = self.kSeg
+        self.tresp = tresp
+        self.tindtestedPairs = tindtestedPairs
+        self.n_grid = nGrid
+        self.n_seg = n_seg
+
+    def _fit(
+        self,
+        lap_reg=5,
+        lr=1e-1,
+        sav_iter=True,
+        max_iter=10000,
+        tol=1e-6,
+    ):
+        self.get_fit_data()
+        tch.manual_seed(10)
+        seg_map = VSM(self.kSeg, self.n_grid, device="cpu")
+        inferred_proba_maps = seg_map.fit(
+            self.tresp,
+            self.tindtestedPairs - 1,
+            lap_reg=lap_reg,
+            lr=lr,
+            max_iter=max_iter,
+            tol=tol,
+            save_iter=sav_iter,
+        )
+        seg_proba_maps = (
+            inferred_proba_maps.reshape(self.n_seg, self.n_grid, self.n_grid)
+            .cpu()
+            .detach()
+            .numpy()
+        )
+        loss = np.zeros(len(seg_map.loss_iter))
+        for i in range(len(seg_map.loss_iter)):
+            loss[i] = seg_map.loss_iter[i].detach().numpy()
+
+        return seg_map, inferred_proba_maps, seg_proba_maps, loss
+
+    def fit(self):
+        self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
+            self._fit()
+        )
+
+        self.is_fit = True
