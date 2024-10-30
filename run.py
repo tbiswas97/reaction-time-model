@@ -149,10 +149,12 @@ def _df_from_file(
         pairs = R.get_tested_pairs(all_pairs=False)
         rts = R.reactionTime
         responses = R.Response
+        p_same = None
     else:
         pairs = R.get_tested_pairs()
         rts = None
         responses = None
+        p_same = None
     if trial_idx == 0:
         df = pd.concat(
             [
@@ -162,6 +164,7 @@ def _df_from_file(
                     decision_bounds=(decision_bounds[0], decision_bounds[1]),
                     reaction_times=rts,
                     responses=responses,
+                    p_same=p_same,
                     condition="voronoi",
                     evidence=evidence,
                 ),
@@ -171,6 +174,7 @@ def _df_from_file(
                     decision_bounds=(decision_bounds[0], decision_bounds[1]),
                     reaction_times=rts,
                     responses=responses,
+                    p_same=p_same,
                     condition="random",
                     evidence=evidence,
                 ),
@@ -180,6 +184,7 @@ def _df_from_file(
                     decision_bounds=(decision_bounds[0], decision_bounds[1]),
                     reaction_times=rts,
                     responses=responses,
+                    p_same=p_same,
                     condition="kmeans",
                     evidence=evidence,
                 ),
@@ -196,6 +201,7 @@ def _df_from_file(
                     decision_bounds=(decision_bounds[0], decision_bounds[1]),
                     reaction_times=rts,
                     responses=responses,
+                    p_same=p_same,
                     condition="voronoi",
                     evidence=evidence,
                 ),
@@ -205,6 +211,7 @@ def _df_from_file(
                     decision_bounds=(decision_bounds[0], decision_bounds[1]),
                     reaction_times=rts,
                     responses=responses,
+                    p_same=p_same,
                     condition="random",
                     evidence=evidence,
                 ),
@@ -219,7 +226,12 @@ def _df_from_file(
 
 
 def df_from_file(
-    file, decision_bounds=(-0.69, 0.69), use_rt=True, trial_idx=0, evidence="first"
+    file,
+    decision_bounds=(-0.69, 0.69),
+    use_rt=True,
+    use_KL=False,
+    trial_idx=0,
+    evidence="first",
 ):
     """
     Wrapper around _df_from_file that runs fits for Voronoi initialization,
