@@ -1,11 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from scipy.stats import entropy
 import sys
 
 sys.path.append("./GSM_rsc_VGG_unity_project/src/")
 
 import toolbox as tb
+
+
+def _get_kld_ij(coord1, coord2, pmap):
+    n_iter = pmap.shape[0]
+
+    pmap_a = pmap[:, :, coord1[0], coord1[1]]
+
+    pmap_b = pmap[:, :, coord2[0], coord2[1]]
+
+    return entropy(pmap_a, pmap_b, axis=1)
 
 
 def _get_psame_t(coord1, coord2, pmap):
@@ -69,7 +80,7 @@ def get_logits(pair, pmap):
     p, _ = _get_psame_t(pair[0], pair[1], pmap)
     logit = np.log((p) / (1 - p))
 
-    return logit
+    return logit, p[-1]
 
 
 def get_final_segmentation_assignment(pair, pmap):
@@ -130,7 +141,7 @@ def get_model_reaction_time(pair, pmap, decision_bounds, evidence="first"):
 
     """
     # returns logit at each EM iteration
-    logits = get_logits(pair, pmap)
+    logits = get_logits(pair, pmap)[0]
     if evidence == "first":
         assert len(decision_bounds) == 2
         seg_flag = get_final_segmentation_assignment(pair, pmap)
@@ -152,7 +163,7 @@ def get_model_reaction_time(pair, pmap, decision_bounds, evidence="first"):
     return rt
 
 
-def get_bin(_bin, pairs, reaction_times=None, responses=None):
+def get_bin(_bin, pairs, reaction_times=None, responses=None, p_same=None):
     """
     Given a list of pairs calculates all distances between them and bins these
     distances into n_bins bins
@@ -191,6 +202,8 @@ def get_bin(_bin, pairs, reaction_times=None, responses=None):
         assert len(reaction_times) == len(pairs)
     if responses is not None:
         assert len(responses) == len(pairs)
+    if p_same is not None:
+        assert len(p_same) == len(responses)
 
     assert _bin >= 0, "Bin ID must be positive int"
 
@@ -199,8 +212,8 @@ def get_bin(_bin, pairs, reaction_times=None, responses=None):
     else:
         cond = (distances > edges[_bin - 1]) & (distances < edges[_bin])
 
-    keys = ["pairs", "distances", "reaction_times", "responses"]
-    values = [pairs, distances, reaction_times, responses]
+    keys = ["pairs", "distances", "reaction_times", "responses", "p_same"]
+    values = [pairs, distances, reaction_times, responses, p_same]
 
     d = {k: v[cond] for k, v in zip(keys, values) if v is not None}
 
@@ -213,6 +226,7 @@ def _get_bin_df(
     pmap,
     reaction_times=None,
     responses=None,
+    p_same=None,
     decision_bounds=None,
     evidence="first",
 ):
@@ -242,7 +256,7 @@ def _get_bin_df(
         A DataFrame with the information from a specific bin as specified by
         _bin parameter
     """
-    d = get_bin(_bin, pairs, reaction_times, responses)
+    d = get_bin(_bin, pairs, reaction_times, responses, p_same)
 
     pairs_binned = d["pairs"]
     distances = d["distances"]
@@ -252,6 +266,9 @@ def _get_bin_df(
     if responses is not None:
         responses = d["responses"]
         responses = [response for response in responses]
+    if p_same is not None:
+        p_same = d["p_same"]
+        p_same = [p for p in p_same]
 
     pairs_binned = [pair for pair in pairs_binned]
     distances = [dist for dist in distances]
@@ -263,7 +280,9 @@ def _get_bin_df(
     else:
         decision_bounds = (-5, 5)
 
-    logits = [get_logits(pair, pmap) for pair in pairs_binned]
+    logits = [get_logits(pair, pmap)[0] for pair in pairs_binned]
+
+    p_same_last = [get_logits(pair, pmap)[1] for pair in pairs_binned]
 
     rt = [
         get_model_reaction_time(pair, pmap, decision_bounds, evidence=evidence)
@@ -280,6 +299,8 @@ def _get_bin_df(
         "model_rt": rt,
         "rt": reaction_times,
         "seg_flag": seg_flag,
+        "model_p_same": p_same_last,
+        "p_same": p_same,
         "responses": responses,
     }
 
@@ -290,6 +311,11 @@ def _get_bin_df(
 
     df = pd.concat([df, df_log], axis=1)
 
+    if p_same is not None:
+        df["kl_divergence"] = df["model_p_same"] * np.log(df["model_p_same"]) - df[
+            "model_p_same"
+        ] * np.log(df["p_same"])
+
     return df
 
 
@@ -298,6 +324,7 @@ def get_df(
     pmap,
     reaction_times=None,
     responses=None,
+    p_same=None,
     bins=range(1, 10),
     decision_bounds=None,
     evidence="first",
@@ -351,6 +378,7 @@ def get_df(
                 pmap,
                 reaction_times=reaction_times,
                 responses=responses,
+                p_same=p_same,
                 decision_bounds=decision_bounds,
                 evidence=evidence,
             )
