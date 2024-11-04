@@ -4,7 +4,7 @@ import pandas as pd
 from scipy.stats import entropy
 import sys
 
-sys.path.append("./GSM_rsc_VGG_unity_project/src/")
+sys.path.append("./sun/src/")
 
 import toolbox as tb
 
