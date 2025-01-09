@@ -341,6 +341,121 @@ def run_all_files(files, n_trials=10, evidence="first"):
     return out
 
 
+def run_n_trials(
+    Response,
+    layers=range(5),
+    n_trials=10,
+    type="voronoi",
+    smooth=1,
+    n_pseudocoords=10,
+    use_pointwise_rts=True,
+):
+
+    max_layer = max(layers)
+
+    R = Response
+
+    _points = np.concatenate(
+        [R.xGrid[..., np.newaxis], R.yGrid[..., np.newaxis]], axis=1
+    )
+    points = [tb.transform_coord_system(coord) for coord in _points]
+
+    pairs = R.get_tested_pairs(all_pairs=False)
+    obj = SM((0, R.image), mode="array")
+
+    pairwise_distances = []
+    decision_rts = []
+    dynamic_maps = []
+    dynamics_dfs = []
+
+    for trial in range(n_trials):
+        print(trial, "...")
+        if type == "voronoi":
+            _prior = utils.generate_random_voronoi_prior(
+                *R.image.shape[:2], R.kSeg, end_iter=0.05
+            )
+            _eps = 0.05
+        else:
+            _prior = utils.generate_random_prior(*R.image.shape[:2], R.kSeg)
+            _eps = 0.1
+
+        obj.fit_model(
+            model="c",
+            n_components=np.array([R.kSeg]),
+            layer_stop=max_layer,
+            keep=True,
+            init=_prior,
+            init_eps=_eps,
+            spatial_smoothing=smooth,
+        )
+
+        # when running multiple trials set kernel_size = None
+        # instead we will use a larger kernel over ALL trials
+        for layer in layers:
+            obj.parse_layer(layer)
+            obj.get_decision_rts(
+                points,
+                pairs,
+                R.testedPairs,
+                kernel_size=None,
+                use_pointwise_rts=use_pointwise_rts,
+                use_pseudocoords=n_pseudocoords,
+            )
+            df = obj.dynamics_df_pairwise
+            df["layer"] = layer
+
+            pair_idxs = df.pair_idx.values
+            df["human_rt"] = R.reactionTime[pair_idxs]
+            df["human_decision"] = R.Response[pair_idxs]
+            df["trial"] = trial
+
+            dynamics_dfs.append(df)
+
+            dynamic_maps.append(obj.pointwise_rts)
+            pairwise_distances.append(obj.pairwise_distances)
+            decision_rts.append(obj.decision_rts)
+
+    df = pd.concat(dynamics_dfs, axis=0, ignore_index=True)
+
+    res = {"df": df, "dynamic_maps": dynamic_maps}
+
+    ## number of yes/no observations per trial
+    # trial_n_obs = {key: np.zeros(len(pairwise_distances)) for key in ["y", "n"]}
+
+    # for i in range(len(pairwise_distances)):
+    # for key in ["y", "n"]:
+    # n_obs = len(pairwise_distances[i][key + "s"])
+    # trial_n_obs[key][i] = n_obs
+
+    # max_obs = {key: np.max(trial_n_obs[key]).astype("int") for key in ["y", "n"]}
+
+    # padded_distances = {
+    # key: np.zeros((len(pairwise_distances), max_obs[key])) for key in ["y", "n"]
+    # }
+
+    # padded_rts = {
+    # key: np.zeros((len(pairwise_distances), max_obs[key])) for key in ["y", "n"]
+    # }
+
+    # for i in range(len(pairwise_distances)):
+    # for key in ["y", "n"]:
+    # d_arr = pairwise_distances[i][key + "s"]
+    # d_arr_pad = np.pad(d_arr, (0, max_obs[key] - len(d_arr)), mode="edge")
+    # rt_arr = decision_rts[i][key]
+    # rt_arr_pad = np.pad(rt_arr, (0, max_obs[key] - len(rt_arr)), mode="edge")
+
+    # padded_distances[key][i, :] = d_arr_pad
+    # padded_rts[key][i, :] = rt_arr_pad
+
+    # res = {
+    # "padded_distances": padded_distances,
+    # "padded_rts": padded_rts,
+    # "dynamic_maps": dynamic_maps,
+    # }
+
+    return df
+
+
 if __name__ == "__main__":
     print("Hello")
 
