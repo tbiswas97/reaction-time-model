@@ -7,7 +7,10 @@ import numpy as np
 # toolbox is imported from src
 import toolbox as tb
 import torch as tch
+from scipy.io import loadmat
 import re
+from glob import glob as glob
+from natsort import natsorted as ns
 from vseg.src.vseg import SegmentationMap as VSM
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
@@ -124,9 +127,18 @@ class Response:
         data = scipy.io.loadmat(filename, struct_as_record=False, squeeze_me=True)
         return _check_keys(data)
 
+    def get_np_coords(self, transform=True):
+        _points = np.concatenate(
+            [self.xGrid[..., np.newaxis], self.yGrid[..., np.newaxis]], axis=1
+        )
+        if transform:
+            points = [tb.transform_coord_system(coord) for coord in _points]
+
+        self.points = points
+
     def get_tested_pairs(self, transform=True, return_rt=True, all_pairs=False):
         """
-        Gets the list of tested pairs and their coordinates
+        Gets the list of tested pairs and their numpy coordinates
 
         Parameters:
         ------------
@@ -227,9 +239,60 @@ class Response:
 
         return seg_map, inferred_proba_maps, seg_proba_maps, loss
 
-    def fit(self):
-        self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
-            self._fit()
-        )
+    def fit(self, preloaded=True):
+        if not preloaded:
+            self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
+                self._fit()
+            )
 
-        self.is_fit = True
+            self.is_fit = True
+        else:
+            home = "data/fits/"
+            filename = "fits_sub_{}_exp{}_session{}_cat{}_img{}.mat".format(
+                self.fileinfo["subject"],
+                self.fileinfo["experiment"],
+                self.fileinfo["session"],
+                self.fileinfo["cat"],
+                self.fileinfo["img"],
+            )
+
+            self.fit_file = home + filename
+
+            self.fit_pmap = np.moveaxis(loadmat(self.fit_file)["seg_map"], -1, 1)
+            self.fit_segmap = self.fit_pmap.argmax(0)
+
+            self.human_seg_flag = np.asarray(
+                [self._get_fit_seg_flag(pair) for pair in self.testedPairs]
+            )
+
+            self.human_psame = np.asarray(
+                [self._get_fit_psame(pair) for pair in self.testedPairs]
+            )
+
+    def _get_fit_seg_flag(self, grid_idxs):
+        unravel_idx = lambda x: np.asarray(
+            np.unravel_index(x - 1, self.fit_segmap.shape[:2])
+        ).T
+
+        idx_a = unravel_idx(grid_idxs[0])
+        idx_b = unravel_idx(grid_idxs[1])
+        seg_flag_a = self.fit_segmap[idx_a[0], idx_a[1]]
+        seg_flag_b = self.fit_segmap[idx_b[0], idx_b[1]]
+
+        return seg_flag_a == seg_flag_b
+
+    def _get_fit_psame(self, grid_idxs):
+        unravel_idx = lambda x: np.asarray(
+            np.unravel_index(x - 1, self.fit_segmap.shape[:2])
+        ).T
+
+        vec_a = self.fit_pmap[
+            :, unravel_idx(grid_idxs[0])[0], unravel_idx(grid_idxs[0])[1]
+        ]
+        vec_b = self.fit_pmap[
+            :, unravel_idx(grid_idxs[1])[0], unravel_idx(grid_idxs[1])[1]
+        ]
+
+        psame = np.dot(vec_a, vec_b)
+
+        return psame
