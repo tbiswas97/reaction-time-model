@@ -3,6 +3,8 @@ import sys
 sys.path.append("../src/")
 import scipy.io
 import numpy as np
+import toolbox as tb
+from collections import Counter
 
 # toolbox is imported from src
 import toolbox as tb
@@ -296,3 +298,23 @@ class Response:
         psame = np.dot(vec_a, vec_b)
 
         return psame
+
+    def sample_pmap(self, resize=True):
+        assert hasattr(self, "fit_pmap")
+        _sample_pmap = lambda x: np.random.choice(list(range(len(x))), size=1, p=x)
+
+        stop = -1
+        while stop < 0:
+            present = 0
+            sample = np.apply_along_axis(_sample_pmap, 0, self.fit_pmap).squeeze()
+            for value in range(self.kSeg):
+                if value in sample:
+                    present += 1
+            if present < self.kSeg:
+                stop = -1
+            else:
+                stop = 0
+
+        if resize:
+            sample = tb.scale_im_up(sample, self.image.shape[0])
+        return sample
