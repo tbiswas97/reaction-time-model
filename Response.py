@@ -4,11 +4,14 @@ sys.path.append("../src/")
 import scipy.io
 import numpy as np
 import toolbox as tb
+from scipy.spatial.distance import jensenshannon
 from collections import Counter
+from SegmentationMap import SegmentationMap as SM
 
 # toolbox is imported from src
 import toolbox as tb
 import torch as tch
+import pandas as pd
 from scipy.io import loadmat
 import re
 from glob import glob as glob
@@ -247,7 +250,6 @@ class Response:
                 self._fit()
             )
 
-            self.is_fit = True
         else:
             home = "data/fits/"
             filename = "fits_sub_{}_exp{}_session{}_cat{}_img{}.mat".format(
@@ -261,7 +263,9 @@ class Response:
             self.fit_file = home + filename
 
             self.fit_pmap = np.moveaxis(loadmat(self.fit_file)["seg_map"], -1, 1)
+
             self.fit_segmap = self.fit_pmap.argmax(0)
+            self.large_fit_segmap = tb.scale_im_up(self.fit_segmap, self.image.shape[0])
 
             self.human_seg_flag = np.asarray(
                 [self._get_fit_seg_flag(pair) for pair in self.testedPairs]
@@ -270,6 +274,8 @@ class Response:
             self.human_psame = np.asarray(
                 [self._get_fit_psame(pair) for pair in self.testedPairs]
             )
+
+            self.is_fit = True
 
     def _get_fit_seg_flag(self, grid_idxs):
         unravel_idx = lambda x: np.asarray(
@@ -318,3 +324,190 @@ class Response:
         if resize:
             sample = tb.scale_im_up(sample, self.image.shape[0])
         return sample
+
+    def run_base_model(self):
+        assert self.is_fit
+
+        BaseModel = SM((0, self.image), mode="array")
+        BaseModel.fit_model(
+            model="c",
+            n_components=np.array([self.kSeg]),
+            layer_stop=1,
+            keep=True,
+            init=self.large_fit_segmap,
+            init_eps=0.01,
+            spatial_smoothing=1,
+        )
+        self.BaseModel = BaseModel
+
+    def parameter_sweep(self, param="autothresh", n_pseudocoords=5):
+
+        BaseModel = self.BaseModel
+
+        self.get_np_coords()
+        points = self.points
+        pairs = self.get_tested_pairs(all_pairs=False)
+
+        rts = BaseModel.get_decision_rts(
+            points,
+            pairs,
+            self.testedPairs,
+            auto_mult=0.01,
+            boundary=None,
+            use_pointwise_rts=None,
+            use_pseudocoords=n_pseudocoords,
+            use_evidence_integration=False,
+            weighted_evidence_integration=True,
+            return_df=False,
+            return_responses=False,
+        )
+
+        return rts
+
+    def run_dynamics_model(
+        self, n_trials=1, smooth=1, noisy_init=False, autothresh=0.0028, boundary=1
+    ):
+
+        self.params = {
+            "boundary": boundary,
+            "ei_boundary": boundary,
+            "wei_boundary": boundary,
+            "autothresh": autothresh,
+        }
+        self.fit()
+
+        dfs = []
+
+        self.Models = []
+
+        for i in range(n_trials):
+            print("Fitting segmap trial {}".format(i))
+            Model = SM((i + 1, self.image), mode="array")
+
+            human_prior = self.sample_pmap()
+
+            Model.fit_model(
+                model="c",
+                n_components=np.array([self.kSeg]),
+                layer_stop=1,
+                keep=True,
+                init=human_prior,
+                init_eps=0.05,
+                spatial_smoothing=smooth,
+            )
+
+            self.get_np_coords()
+            points = self.points
+            pairs = self.get_tested_pairs(all_pairs=False)
+
+            print("Running dynamics model trial {}".format(i))
+            df = Model.get_decision_rts(
+                points,
+                pairs,
+                self.testedPairs,
+                auto_mult=autothresh,
+                boundary={"const": [boundary, -boundary]},
+                use_pointwise_rts=None,
+                use_pseudocoords=10,
+                use_evidence_integration=False,
+                weighted_evidence_integration=True,
+            )
+
+            self.Models.append(Model)
+
+            df["trial"] = i
+
+            dfs.append(df)
+
+        out = pd.concat(dfs, ignore_index=True, axis=0)
+        out["human_response"] = self.Response[out.pair_idx.values]
+        out["human_psame"] = self.human_psame[out.pair_idx.values]
+        out["human_seg_flag"] = self.human_seg_flag[out.pair_idx.values]
+        out["human_rt"] = self.reactionTime[out.pair_idx.values]
+        out["k"] = self.kSeg
+        out["subject"] = self.fileinfo["subject"]
+        out["cat"] = self.fileinfo["cat"]
+        out["img"] = self.fileinfo["img"]
+
+        self.df = out
+
+        # def compare_dist(df, df_new=None, key="auto_rt"):
+        # human_rt_avg = df.pivot_table(
+        # index=["pair_idx"], values=["human_rt"]
+        # ).values
+
+        # if df_new is not None:
+        # df = df_new
+        # else:
+        # df = df
+
+        # model_rt_avg = df.pivot_table(index=["pair_idx"], values=[key]).values
+        # human_data = np.log(human_rt_avg[model_rt_avg != 0])
+        # model_data = np.log(model_rt_avg[model_rt_avg != 0])
+        # model_resc = (model_data - np.min(model_data)) / np.ptp(model_data)
+        # human_resc = (human_data - np.min(human_data)) / np.ptp(human_data)
+
+        # return jensenshannon(human_resc, model_resc)
+
+        # self.jsd_fit = compare_dist(self.df)
+
+        return out
+
+    # TODO: use self._set_param to write a parameter sweep function
+    def _set_param(
+        self,
+        value=1,
+        param="bounds",
+        proxy="online_rt",
+        return_jsd=False,
+        verbose=False,
+    ):
+
+        if proxy == "online_rt":
+            self.params.update("boundary", value)
+        elif proxy == "ei_rt":
+            self.params.update("ei_boundary", value)
+        elif proxy == "wei_rt":
+            self.params.update("wei_boundary", value)
+
+        def compare_dist(df, df_new=None, key="auto_rt"):
+            human_rt_avg = df.pivot_table(
+                index=["pair_idx"], values=["human_rt"]
+            ).values
+
+            if df_new is not None:
+                df = df_new
+            else:
+                df = df
+
+            model_rt_avg = df.pivot_table(index=["pair_idx"], values=[key]).values
+            human_data = np.log(human_rt_avg[model_rt_avg != 0])
+            model_data = np.log(model_rt_avg[model_rt_avg != 0])
+            model_resc = (model_data - np.min(model_data)) / np.ptp(model_data)
+            human_resc = (human_data - np.min(human_data)) / np.ptp(human_data)
+
+            return jensenshannon(human_resc, model_resc)
+
+        new_dfs = []
+        if param == "bounds":
+            for Model in self.Models:
+                if verbose:
+                    print("Refitting trial {}".format(Model.iid_idx))
+                df_new = Model.reapply_bounds({"const": [value, -value]}, col=proxy)
+                new_dfs.append(df_new)
+        elif param == "autothresh":
+            assert proxy == "auto_rt"
+            for Model in self.Models:
+                if verbose:
+                    print("Refitting trial {}".format(Model.iid_idx))
+                df_new = Model.reapply_automult(value)
+                new_dfs.append(df_new)
+
+        out = pd.concat(new_dfs, ignore_index=True, axis=0)
+
+        if return_jsd:
+            self.param_comp = compare_dist(self.df, out, key=proxy)
+
+        self.df[proxy] = out[proxy]
+
+        return out
