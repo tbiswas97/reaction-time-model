@@ -5,11 +5,14 @@ import scipy.io
 import numpy as np
 import toolbox as tb
 from scipy.spatial.distance import jensenshannon
+from scipy.optimize import basinhopping
+from scipy.optimize import dual_annealing
 from collections import Counter
 from SegmentationMap import SegmentationMap as SM
 
 # toolbox is imported from src
 import toolbox as tb
+import dynamics
 import torch as tch
 import pandas as pd
 from scipy.io import loadmat
@@ -17,6 +20,7 @@ import re
 from glob import glob as glob
 from natsort import natsorted as ns
 from vseg.src.vseg import SegmentationMap as VSM
+from numpy.lib.stride_tricks import sliding_window_view
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
 
@@ -59,7 +63,12 @@ class Response:
 
     def parse_filename(self):
         """
-        Parses filenames with regex and extracts the following:
+        Parses filename with regex and extracts the following:
+        - subject
+        - experiment
+        - session
+        - image category
+        - image id
 
         Returns:
         ---------
@@ -133,6 +142,9 @@ class Response:
         return _check_keys(data)
 
     def get_np_coords(self, transform=True):
+        """
+        Transform x,y coordinates defined in file to numpy array coords
+        """
         _points = np.concatenate(
             [self.xGrid[..., np.newaxis], self.yGrid[..., np.newaxis]], axis=1
         )
@@ -192,7 +204,7 @@ class Response:
 
     def get_fit_data(self):
         """
-        Extracts the data that is necessary to fit Vseg
+        Extracts the data that is necessary to fit Vseg,
         """
         resp = self.Response
         tresp = tch.tensor(np.array(resp, float))
@@ -220,6 +232,10 @@ class Response:
         max_iter=10000,
         tol=1e-6,
     ):
+        """
+        Runs vseg using PyTorch, but doesn't work :(
+
+        """
         self.get_fit_data()
         tch.manual_seed(10)
         seg_map = VSM(self.kSeg, self.n_grid, device="cpu")
@@ -245,6 +261,14 @@ class Response:
         return seg_map, inferred_proba_maps, seg_proba_maps, loss
 
     def fit(self, preloaded=True):
+        """
+        Get preloaded maps that are fit by vseg, using filename information
+
+        Parameters:
+        -----------
+        preloaded : bool
+            default is True, does not work for False yet
+        """
         if not preloaded:
             self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
                 self._fit()
@@ -278,6 +302,15 @@ class Response:
             self.is_fit = True
 
     def _get_fit_seg_flag(self, grid_idxs):
+        """
+        Returns the response according the participants' final segmentation map
+
+        Parameters:
+        ------------
+        grid_idxs : list
+            the index of the point in the trial grid
+
+        """
         unravel_idx = lambda x: np.asarray(
             np.unravel_index(x - 1, self.fit_segmap.shape[:2])
         ).T
@@ -306,10 +339,14 @@ class Response:
         return psame
 
     def sample_pmap(self, resize=True):
+        """
+        Draw a sample from the probabilistic segmentation map
+        """
         assert hasattr(self, "fit_pmap")
         _sample_pmap = lambda x: np.random.choice(list(range(len(x))), size=1, p=x)
 
         stop = -1
+        # Sample so that every segment is assigned to atleast one pixel
         while stop < 0:
             present = 0
             sample = np.apply_along_axis(_sample_pmap, 0, self.fit_pmap).squeeze()
@@ -325,10 +362,12 @@ class Response:
             sample = tb.scale_im_up(sample, self.image.shape[0])
         return sample
 
-    def run_base_model(self):
+    def run_base_model(self, n_pseudocoords=5, verbose=False):
         assert self.is_fit
 
         BaseModel = SM((0, self.image), mode="array")
+        if verbose:
+            print("Fitting segmentation map")
         BaseModel.fit_model(
             model="c",
             n_components=np.array([self.kSeg]),
@@ -338,53 +377,450 @@ class Response:
             init_eps=0.01,
             spatial_smoothing=1,
         )
-        self.BaseModel = BaseModel
-
-    def parameter_sweep(self, param="autothresh", n_pseudocoords=5):
-
-        BaseModel = self.BaseModel
-
         self.get_np_coords()
         points = self.points
         pairs = self.get_tested_pairs(all_pairs=False)
+        self.pairs = pairs
 
-        rts = BaseModel.get_decision_rts(
-            points,
-            pairs,
-            self.testedPairs,
-            auto_mult=0.01,
-            boundary=None,
-            use_pointwise_rts=None,
-            use_pseudocoords=n_pseudocoords,
-            use_evidence_integration=False,
-            weighted_evidence_integration=True,
-            return_df=False,
-            return_responses=False,
+        BaseModel.get_iter_info(
+            points, pairs, self.testedPairs, n_pseudocoords=n_pseudocoords
         )
+        BaseModel.get_ei_info(pairs, weighted=True)
+        self.BaseModel = BaseModel
+
+        return None
+
+    def loss_function(
+        self,
+        value,
+        loss_param="automult",
+        loss_type="jsd",
+        penalize_zeros=True,
+        conv_failure="argmax",
+        mode="base",
+        use_boundary=None,
+        return_data=False,
+        split_by_response=True,
+    ):
+        if (loss_param == "automult") and (use_boundary is not None):
+            model_data_full = self._sweep(
+                value,
+                col=loss_param,
+                conv_failure=conv_failure,
+                mode=mode,
+                use_boundary=use_boundary,
+            )
+        else:
+            model_data_full = self._sweep(
+                value, col=loss_param, conv_failure=conv_failure, mode=mode
+            )
+        n_zeros = len(self.reactionTime) - np.count_nonzero(model_data_full)
+        if loss_type == "mle":
+            n_zeros *= 1000
+        human_data_full = self.reactionTime
+
+        model_data = model_data_full[model_data_full != 0]
+        human_data = human_data_full[model_data_full != 0]
+
+        m_log_data = np.log(model_data)
+        h_log_data = np.log(human_data)
+
+        model_resc = (m_log_data - np.min(m_log_data)) / np.ptp(m_log_data)
+        human_resc = (h_log_data - np.min(h_log_data)) / np.ptp(h_log_data)
+        if return_data and not split_by_response:
+            return model_resc, human_resc
+
+        if split_by_response:
+            human_responses = self.Response.astype("bool")[model_data_full != 0]
+
+            if return_data:
+                return model_resc, human_resc, human_responses
+
+            model_split = {
+                True: model_resc[human_responses],
+                False: model_resc[~human_responses],
+            }
+
+            human_split = {
+                True: human_resc[human_responses],
+                False: human_resc[~human_responses],
+            }
+
+            if loss_type == "jsd":
+                terms = []
+                for i in [True, False]:
+                    terms.append(jensenshannon(human_split[i], model_split[i]))
+            elif loss_type == "mse":
+                terms = []
+                for i in [True, False]:
+                    terms.append(
+                        (np.mean(human_split[i]) - np.mean(model_split[i])) ** 2
+                    )
+            elif loss_type == "mle":
+                lkls_split = {
+                    True: tb.emp_lkl_mkii(model_split[True], human_split[True]),
+                    False: tb.emp_lkl_mkii(model_split[False], human_split[False]),
+                }
+
+                lkls = np.zeros(human_data.shape)
+                lkls[human_responses] = lkls_split[True]
+                lkls[~human_responses] = lkls_split[False]
+                self.lkls = lkls
+
+                terms = []
+                for i in [True, False]:
+                    terms.append(lkls_split[i])
+
+            elif loss_type == "gaussian_mle":
+                lkls_split = {
+                    True: tb.gaussian_lkl(model_split[True], human_split[True]),
+                    False: tb.gaussian_lkl(model_split[False], human_split[False]),
+                }
+
+                lkls = np.zeros(human_data.shape)
+                lkls[human_responses] = lkls_split[True]
+                lkls[~human_responses] = lkls_split[False]
+                self.lkls = lkls
+
+                terms = []
+                for i in [True, False]:
+                    terms.append(lkls_split[i])
+
+            term1 = sum(terms)
+
+        else:
+            if loss_type == "jsd":
+                term1 = jensenshannon(human_resc, model_resc)
+            elif loss_type == "mse":
+                term1 = (np.mean(human_resc) - np.mean(model_resc)) ** 2
+            elif loss_type == "mle":
+                lkls = tb.emp_lkl_mkii(human_resc, model_resc)
+                term1 = lkls
+
+        if penalize_zeros:
+            loss = term1 + n_zeros
+        else:
+            loss = term1
+
+        return loss
+
+    def optimize_params_2d(
+        self,
+        init_guess=None,
+        verbose=True,
+        loss_type="mle",
+        split_by_response=True,
+        penalize_zeros=True,
+        annealing_step=True,
+    ):
+        assert self.is_fit
+
+        if init_guess is not None:
+            init_guess = init_guess
+        else:
+            init_guess = np.array([0.01, 5])
+
+        hyperparams = {"x0": init_guess, "stepsize": 0.1, "T": 1, "niter_success": 100}
+
+        loss = lambda x: self.loss_function(
+            x[0],
+            loss_param="automult",
+            loss_type=loss_type,
+            penalize_zeros=penalize_zeros,
+            mode="all",
+            split_by_response=split_by_response,
+            use_boundary=x[1],
+        )
+
+        opt_res = basinhopping(
+            loss,
+            **hyperparams,
+            minimizer_kwargs={"bounds": [(1e-4, 1), (1e-4, 10)]},
+            disp=verbose
+        )
+
+        if annealing_step:
+            optt_res = dual_annealing(
+                loss,
+                [
+                    (
+                        opt_res.x[0] - 0.5 * opt_res.x[0],
+                        opt_res.x[0] + 0.5 * opt_res.x[0],
+                    ),
+                    (
+                        opt_res.x[1] - 0.5 * opt_res.x[1],
+                        opt_res.x[1] + 0.5 * opt_res.x[1],
+                    ),
+                ],
+                x0=opt_res.x,
+                callback=print,
+                maxiter=100,
+            )
+
+            res = optt_res
+        else:
+            res = opt_res
+
+        self.opt_automult_param2d = res.x
+        self.opt_automult_error2d = res.fun
+
+    def optimize_params(
+        self,
+        params=["automult", "online_rt", "ei_rt", "wei_rt"],
+        verbose=False,
+        loss_type="jsd",
+        split_by_response=True,
+        penalize_zeros=True,
+        annealing_step=True,
+        mode="base",
+        add_auto_bound=None,
+    ):
+        """
+        Parameters:
+        ------------
+        Optimizes model parameters to match distribution of human data.
+        Hyperparameters are not function arguments, but can be changed below
+
+        params : list of str
+            "automult" : derivative parameter for FlexMM model "online_bound":
+            bound parameter for FlexMM model "ei_bound": bound parameter for
+            vanilla EI model "wei_bound" : bound parameter for weighted EI model
+
+        loss_type : str
+            "jsd" : uses Jensen-Shannon Divergence
+            "mle" : uses empirical likelihood function
+                from model data CDF
+            "mse" : uses the mean-square error
+            "gaussian_mle" : uses a likelihood function that assumes the
+                model distribution is Gaussian
+        """
+        assert self.is_fit
+
+        if mode == "base":
+            assert hasattr(
+                self, "BaseModel"
+            ), "Must run BaseModel before optimizing params"
+
+        self.opt_params = {}
+        self.opt_error = {}
+
+        auto_mult_init = np.array([0.01])
+
+        hyperparams = {
+            "automult": {
+                "x0": auto_mult_init,
+                "stepsize": 0.005,
+                "T": 0.01,
+                "niter_success": 100,
+            },
+            "online_rt": {"x0": 5, "stepsize": 0.1, "T": 1, "niter_success": 100},
+            "ei_rt": {"x0": 5, "stepsize": 0.1, "T": 1, "niter_success": 100},
+            "wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 100},
+        }
+
+        if loss_type == "mle":
+            hyperparams = {
+                "automult": {
+                    "x0": auto_mult_init,
+                    "stepsize": 0.005,
+                    "T": 100,
+                    "niter_success": 100,
+                },
+                "online_rt": {"x0": 5, "stepsize": 0.1, "T": 100, "niter_success": 100},
+                "ei_rt": {"x0": 5, "stepsize": 0.1, "T": 100, "niter_success": 100},
+                "wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 100},
+            }
+
+        if loss_type == "mse":
+            hyperparams.update(
+                {"wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 20}}
+            )
+
+        for param in params:
+            if verbose:
+                print(
+                    "\n Running basinhopping optimization for parameter: {} \n".format(
+                        param
+                    )
+                )
+            if add_auto_bound is not None:
+                loss = lambda x: self.loss_function(
+                    x,
+                    loss_param=param,
+                    loss_type=loss_type,
+                    penalize_zeros=penalize_zeros,
+                    mode=mode,
+                    split_by_response=split_by_response,
+                    use_boundary=add_auto_bound,
+                )
+            else:
+                loss = lambda x: self.loss_function(
+                    x,
+                    loss_param=param,
+                    loss_type=loss_type,
+                    penalize_zeros=penalize_zeros,
+                    mode=mode,
+                    split_by_response=split_by_response,
+                )
+            cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
+            opt_res = basinhopping(
+                loss,
+                **hyperparams[param],
+                minimizer_kwargs={"bounds": [(1e-4, 10)]},
+                disp=verbose,
+                callback=cbf
+            )
+            if verbose:
+                print("\n \t Running annealing step ... ")
+            if annealing_step:
+                if param != "automult":
+                    optt_res = dual_annealing(
+                        loss,
+                        [
+                            (
+                                opt_res.x[0] - 0.5 * opt_res.x[0],
+                                opt_res.x[0] + 0.5 * opt_res.x[0],
+                            )
+                        ],
+                        x0=opt_res.x,
+                        callback=print,
+                        maxiter=100,
+                    )
+                else:
+                    optt_res = dual_annealing(
+                        loss,
+                        [
+                            (
+                                opt_res.x[0] - 0.1 * opt_res.x[0],
+                                opt_res.x[0] + 0.1 * opt_res.x[0],
+                            )
+                        ],
+                        x0=opt_res.x,
+                        callback=print,
+                        maxiter=20,
+                    )
+                res = optt_res
+            else:
+                res = opt_res
+
+            self.opt_error[param] = res.fun
+            self.opt_params[param] = res.x[0]
+
+    def _sweep(
+        self,
+        value,
+        col="automult",
+        conv_failure="argmax",
+        mode="base",
+        use_boundary=None,
+    ):
+        """
+        Parameters:
+        -----------
+        value : float
+        col : str
+            "automult" : derivative parameter for FlexMM model
+            "online_bound": bound parameter for FlexMM model
+            "ei_bound": bound parameter for vanilla EI model
+            "wei_bound" : bound parameter for weighted EI model
+
+        Returns:
+        ---------
+        rts : array of reaction times
+        """
+        if mode == "base":
+            assert hasattr(self, "BaseModel")
+
+            if col == "automult":
+                if use_boundary is not None:
+                    rts = self.BaseModel._get_rt_from_deriv(
+                        value,
+                        return_mean=True,
+                        failure_mode=conv_failure,
+                        use_boundary=use_boundary,
+                    )
+                else:
+                    rts = self.BaseModel._get_rt_from_deriv(
+                        value, return_mean=True, failure_mode=conv_failure
+                    )
+            if col == "online_rt":
+                rts = self.BaseModel._get_rt_from_boundary(
+                    value, param="logits", return_mean=True
+                )
+            elif col == "ei_rt":
+                rts = self.BaseModel._get_rt_from_boundary(
+                    value, param="ei_logits", return_mean=True
+                )
+            elif col == "wei_rt":
+                rts = self.BaseModel._get_rt_from_boundary(
+                    value, param="wei_logits", return_mean=True
+                )
+        else:
+            if col == "automult":
+                if use_boundary is not None:
+                    rts = dynamics._get_rt_from_deriv(
+                        self.smooth_logits,
+                        self.logit_deriv,
+                        value,
+                        return_mean=True,
+                        failure_mode=conv_failure,
+                        mean_axis=(0, -1),
+                        use_boundary=use_boundary,
+                    )
+                else:
+                    rts = dynamics._get_rt_from_deriv(
+                        self.smooth_logits,
+                        self.logit_deriv,
+                        value,
+                        return_mean=True,
+                        failure_mode=conv_failure,
+                        mean_axis=(0, -1),
+                    )
+            if col == "online_rt":
+                rts = dynamics._get_rt_from_boundary(
+                    self.logits,
+                    value,
+                    return_mean=True,
+                    output_flat=False,
+                    mean_axis=(0, -1),
+                )
+            elif col == "ei_rt":
+                rts = dynamics._get_rt_from_boundary(
+                    self.ei_logits,
+                    value,
+                    return_mean=True,
+                    output_flat=False,
+                    mean_axis=(0, -1),
+                )
+            elif col == "wei_rt":
+                rts = dynamics._get_rt_from_boundary(
+                    self.wei_logits,
+                    value,
+                    return_mean=True,
+                    output_flat=False,
+                    mean_axis=(0, -1),
+                )
 
         return rts
 
     def run_dynamics_model(
-        self, n_trials=1, smooth=1, noisy_init=False, autothresh=0.0028, boundary=1
+        self, n_trials=2, smooth=1, noisy_init=True, n_pseudocoords=4
     ):
 
-        self.params = {
-            "boundary": boundary,
-            "ei_boundary": boundary,
-            "wei_boundary": boundary,
-            "autothresh": autothresh,
-        }
         self.fit()
 
-        dfs = []
-
         self.Models = []
+
+        n_iter = []
 
         for i in range(n_trials):
             print("Fitting segmap trial {}".format(i))
             Model = SM((i + 1, self.image), mode="array")
 
-            human_prior = self.sample_pmap()
+            if noisy_init:
+                human_prior = self.sample_pmap()
+            else:
+                human_prior = self.large_fit_segmap
 
             Model.fit_model(
                 model="c",
@@ -400,114 +836,40 @@ class Response:
             points = self.points
             pairs = self.get_tested_pairs(all_pairs=False)
 
-            print("Running dynamics model trial {}".format(i))
-            df = Model.get_decision_rts(
-                points,
-                pairs,
-                self.testedPairs,
-                auto_mult=autothresh,
-                boundary={"const": [boundary, -boundary]},
-                use_pointwise_rts=None,
-                use_pseudocoords=10,
-                use_evidence_integration=False,
-                weighted_evidence_integration=True,
+            Model.get_iter_info(
+                points, pairs, self.testedPairs, n_pseudocoords=n_pseudocoords
             )
+
+            n_iter.append(Model.n_iter)
+
+            Model.get_ei_info(pairs, weighted=True)
 
             self.Models.append(Model)
 
-            df["trial"] = i
+        for Model in self.Models:
+            if Model.logits.shape[-1] < max(n_iter):
+                pad_length = max(n_iter) - Model.logits.shape[-1]
 
-            dfs.append(df)
+                Model.sfs_t = np.pad(
+                    Model.sfs_t, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.logits = np.pad(
+                    Model.logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.ei_logits = np.pad(
+                    Model.ei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.wei_logits = np.pad(
+                    Model.wei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+        self.seg_flags = np.asarray([Model.sfs_t for Model in self.Models])
+        self.logits = np.asarray([Model.logits for Model in self.Models])
+        self.ei_logits = np.asarray([Model.ei_logits for Model in self.Models])
+        self.wei_logits = np.asarray([Model.wei_logits for Model in self.Models])
 
-        out = pd.concat(dfs, ignore_index=True, axis=0)
-        out["human_response"] = self.Response[out.pair_idx.values]
-        out["human_psame"] = self.human_psame[out.pair_idx.values]
-        out["human_seg_flag"] = self.human_seg_flag[out.pair_idx.values]
-        out["human_rt"] = self.reactionTime[out.pair_idx.values]
-        out["k"] = self.kSeg
-        out["subject"] = self.fileinfo["subject"]
-        out["cat"] = self.fileinfo["cat"]
-        out["img"] = self.fileinfo["img"]
+        self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
 
-        self.df = out
-
-        # def compare_dist(df, df_new=None, key="auto_rt"):
-        # human_rt_avg = df.pivot_table(
-        # index=["pair_idx"], values=["human_rt"]
-        # ).values
-
-        # if df_new is not None:
-        # df = df_new
-        # else:
-        # df = df
-
-        # model_rt_avg = df.pivot_table(index=["pair_idx"], values=[key]).values
-        # human_data = np.log(human_rt_avg[model_rt_avg != 0])
-        # model_data = np.log(model_rt_avg[model_rt_avg != 0])
-        # model_resc = (model_data - np.min(model_data)) / np.ptp(model_data)
-        # human_resc = (human_data - np.min(human_data)) / np.ptp(human_data)
-
-        # return jensenshannon(human_resc, model_resc)
-
-        # self.jsd_fit = compare_dist(self.df)
-
-        return out
-
-    # TODO: use self._set_param to write a parameter sweep function
-    def _set_param(
-        self,
-        value=1,
-        param="bounds",
-        proxy="online_rt",
-        return_jsd=False,
-        verbose=False,
-    ):
-
-        if proxy == "online_rt":
-            self.params.update("boundary", value)
-        elif proxy == "ei_rt":
-            self.params.update("ei_boundary", value)
-        elif proxy == "wei_rt":
-            self.params.update("wei_boundary", value)
-
-        def compare_dist(df, df_new=None, key="auto_rt"):
-            human_rt_avg = df.pivot_table(
-                index=["pair_idx"], values=["human_rt"]
-            ).values
-
-            if df_new is not None:
-                df = df_new
-            else:
-                df = df
-
-            model_rt_avg = df.pivot_table(index=["pair_idx"], values=[key]).values
-            human_data = np.log(human_rt_avg[model_rt_avg != 0])
-            model_data = np.log(model_rt_avg[model_rt_avg != 0])
-            model_resc = (model_data - np.min(model_data)) / np.ptp(model_data)
-            human_resc = (human_data - np.min(human_data)) / np.ptp(human_data)
-
-            return jensenshannon(human_resc, model_resc)
-
-        new_dfs = []
-        if param == "bounds":
-            for Model in self.Models:
-                if verbose:
-                    print("Refitting trial {}".format(Model.iid_idx))
-                df_new = Model.reapply_bounds({"const": [value, -value]}, col=proxy)
-                new_dfs.append(df_new)
-        elif param == "autothresh":
-            assert proxy == "auto_rt"
-            for Model in self.Models:
-                if verbose:
-                    print("Refitting trial {}".format(Model.iid_idx))
-                df_new = Model.reapply_automult(value)
-                new_dfs.append(df_new)
-
-        out = pd.concat(new_dfs, ignore_index=True, axis=0)
-
-        if return_jsd:
-            self.param_comp = compare_dist(self.df, out, key=proxy)
-
-        self.df[proxy] = out[proxy]
-
-        return out
+        diff = lambda x: (x[-1] - x[0]) / len(x)
+        self.logit_deriv = np.apply_along_axis(
+            diff, -1, sliding_window_view(self.logits, 3, axis=-1)
+        )
