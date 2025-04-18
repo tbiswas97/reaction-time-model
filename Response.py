@@ -7,10 +7,13 @@ import toolbox as tb
 from scipy.spatial.distance import jensenshannon
 from scipy.optimize import basinhopping
 from scipy.optimize import dual_annealing
+from scipy.stats import iqr
 from collections import Counter
 from SegmentationMap import SegmentationMap as SM
+from copy import deepcopy
 
 # toolbox is imported from src
+import os
 import toolbox as tb
 import dynamics
 import torch as tch
@@ -269,6 +272,7 @@ class Response:
         preloaded : bool
             default is True, does not work for False yet
         """
+        os.chdir("/Users/tb/Documents/lab/projects/em_iteration_analysis")
         if not preloaded:
             self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
                 self._fit()
@@ -804,7 +808,14 @@ class Response:
         return rts
 
     def run_dynamics_model(
-        self, n_trials=2, smooth=1, noisy_init=True, n_pseudocoords=4
+        self,
+        n_trials=2,
+        smooth=1,
+        noisy_init=True,
+        n_pseudocoords=4,
+        layer=1,
+        random_init=False,
+        n_pca=0.95,
     ):
 
         self.fit()
@@ -819,18 +830,30 @@ class Response:
 
             if noisy_init:
                 human_prior = self.sample_pmap()
+                init_eps = 0.05
             else:
                 human_prior = self.large_fit_segmap
+                init_eps = 0.01
+
+            if random_init:
+                human_prior = np.random.choice(
+                    range(self.kSeg), size=(self.image.shape[0], self.image.shape[1])
+                )
+
+                init_eps = 0.5 * (1 / (self.kSeg - 1)) - 1e-4
 
             Model.fit_model(
                 model="c",
                 n_components=np.array([self.kSeg]),
-                layer_stop=1,
+                layer_stop=layer,
                 keep=True,
                 init=human_prior,
-                init_eps=0.05,
+                init_eps=init_eps,
                 spatial_smoothing=smooth,
+                n_pca=n_pca,
             )
+
+            Model.parse_layer(layer)
 
             self.get_np_coords()
             points = self.points
@@ -842,9 +865,23 @@ class Response:
 
             n_iter.append(Model.n_iter)
 
-            Model.get_ei_info(pairs, weighted=True)
+            conv_logits = Model.logits[..., -1].reshape(-1)
+
+            ei_noise = iqr(conv_logits, rng=(25, 75))
+            wei_noise = iqr(conv_logits, rng=(10, 90))
+
+            Model.get_ei_info(
+                pairs, weighted=True, noise=ei_noise, weighted_noise=wei_noise
+            )
 
             self.Models.append(Model)
+
+            # check logits for infs
+            for attr in ["logits", "ei_logits", "wei_logits"]:
+                struct = Model.__dict__[attr]
+                assert (
+                    struct[(struct == np.inf) | (struct == -np.inf)].size == 0
+                ), "inf values present"
 
         for Model in self.Models:
             if Model.logits.shape[-1] < max(n_iter):
@@ -866,6 +903,118 @@ class Response:
         self.logits = np.asarray([Model.logits for Model in self.Models])
         self.ei_logits = np.asarray([Model.ei_logits for Model in self.Models])
         self.wei_logits = np.asarray([Model.wei_logits for Model in self.Models])
+
+        self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
+
+        diff = lambda x: (x[-1] - x[0]) / len(x)
+        self.logit_deriv = np.apply_along_axis(
+            diff, -1, sliding_window_view(self.logits, 3, axis=-1)
+        )
+
+    def run_multilayer_model(
+        self, n_layers=5, smooth=1, noisy_init=True, n_pseudocoords=4
+    ):
+        self.fit()
+
+        self.Models = []
+
+        Model = SM((1, self.image), mode="array")
+        n_iter = []
+
+        if noisy_init:
+            human_prior = self.sample_pmap()
+        else:
+            human_prior = self.large_fit_segmap
+
+        Model.fit_model(
+            model="c",
+            n_components=np.array([self.kSeg]),
+            layer_stop=n_layers,
+            keep=True,
+            init=human_prior,
+            init_eps=0.05,
+            spatial_smoothing=smooth,
+        )
+
+        for i in range(1, n_layers + 1):
+            Layer = deepcopy(Model)
+            Layer.parse_layer(i)
+
+            self.get_np_coords()
+            points = self.points
+            pairs = self.get_tested_pairs(all_pairs=False)
+
+            Layer.get_iter_info(
+                points, pairs, self.testedPairs, n_pseudocoords=n_pseudocoords
+            )
+
+            n_iter.append(Layer.n_iter)
+
+            Layer.get_ei_info(pairs, weighted=True)
+
+            self.Models.append(Layer)
+
+        for Model in self.Models:
+            if Model.logits.shape[-1] < max(n_iter):
+                pad_length = max(n_iter) - Model.logits.shape[-1]
+
+                Model.sfs_t = np.pad(
+                    Model.sfs_t, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.logits = np.pad(
+                    Model.logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.ei_logits = np.pad(
+                    Model.ei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+                Model.wei_logits = np.pad(
+                    Model.wei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
+                )
+        self.seg_flags = np.asarray([Model.sfs_t for Model in self.Models])
+        self.logits = np.asarray([Model.logits for Model in self.Models])
+        # self.logits = np.asarray([self.Models[-1].logits] * n_layers)
+        self.ei_logits = np.asarray([self.Models[-1].ei_logits] * n_layers)
+        self.wei_logits = np.asarray([self.Models[-1].wei_logits] * n_layers)
+
+        self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
+
+        diff = lambda x: (x[-1] - x[0]) / len(x)
+        self.logit_deriv = np.apply_along_axis(
+            diff, -1, sliding_window_view(self.logits, 3, axis=-1)
+        )
+
+    def set_layer_in_multilayer(self, layer, n_pseudocoords=20):
+        Model = self.Models[0]
+        Model.parse_layer(layer)
+
+        self.get_np_coords()
+        points = self.points
+        pairs = self.get_tested_pairs(all_pairs=False)
+
+        Model.get_iter_info(
+            points, pairs, self.testedPairs, n_pseudocoords=n_pseudocoords
+        )
+
+        conv_logits = Model.logits[..., -1].reshape(-1)
+
+        ei_noise = iqr(conv_logits, rng=(25, 75))
+        wei_noise = iqr(conv_logits, rng=(10, 90))
+
+        Model.get_ei_info(
+            pairs, weighted=True, noise=ei_noise, weighted_noise=wei_noise
+        )
+
+        # check logits for infs
+        for attr in ["logits", "ei_logits", "wei_logits"]:
+            struct = Model.__dict__[attr]
+            assert (
+                struct[(struct == np.inf) | (struct == -np.inf)].size == 0
+            ), "inf values present"
+
+        self.seg_flags = Model.sfs_t
+        self.logits = Model.logits
+        self.ei_logits = Model.ei_logits
+        self.wei_logits = Model.wei_logits
 
         self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
 
