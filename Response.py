@@ -26,6 +26,7 @@ from vseg.src.vseg import SegmentationMap as VSM
 from numpy.lib.stride_tricks import sliding_window_view
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
+PARENT_DIR = "/Users/tb/Documents/lab/projects/em_iteration_analysis"
 
 
 class Response:
@@ -272,7 +273,7 @@ class Response:
         preloaded : bool
             default is True, does not work for False yet
         """
-        os.chdir("/Users/tb/Documents/lab/projects/em_iteration_analysis")
+        os.chdir(PARENT_DIR)
         if not preloaded:
             self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
                 self._fit()
@@ -327,6 +328,9 @@ class Response:
         return seg_flag_a == seg_flag_b
 
     def _get_fit_psame(self, grid_idxs):
+        """
+        Returns the segment probabilities decoded from participant responses
+        """
         unravel_idx = lambda x: np.asarray(
             np.unravel_index(x - 1, self.fit_segmap.shape[:2])
         ).T
@@ -344,7 +348,7 @@ class Response:
 
     def sample_pmap(self, resize=True):
         """
-        Draw a sample from the probabilistic segmentation map
+        Draw a sample from the probabilistic segmentation map decoded from participant responses
         """
         assert hasattr(self, "fit_pmap")
         _sample_pmap = lambda x: np.random.choice(list(range(len(x))), size=1, p=x)
@@ -366,446 +370,442 @@ class Response:
             sample = tb.scale_im_up(sample, self.image.shape[0])
         return sample
 
-    def run_base_model(self, n_pseudocoords=5, verbose=False):
-        assert self.is_fit
+    if False:
 
-        BaseModel = SM((0, self.image), mode="array")
-        if verbose:
-            print("Fitting segmentation map")
-        BaseModel.fit_model(
-            model="c",
-            n_components=np.array([self.kSeg]),
-            layer_stop=1,
-            keep=True,
-            init=self.large_fit_segmap,
-            init_eps=0.01,
-            spatial_smoothing=1,
-        )
-        self.get_np_coords()
-        points = self.points
-        pairs = self.get_tested_pairs(all_pairs=False)
-        self.pairs = pairs
-
-        BaseModel.get_iter_info(
-            points, pairs, self.testedPairs, n_pseudocoords=n_pseudocoords
-        )
-        BaseModel.get_ei_info(pairs, weighted=True)
-        self.BaseModel = BaseModel
-
-        return None
-
-    def loss_function(
-        self,
-        value,
-        loss_param="automult",
-        loss_type="jsd",
-        penalize_zeros=True,
-        conv_failure="argmax",
-        mode="base",
-        use_boundary=None,
-        return_data=False,
-        split_by_response=True,
-    ):
-        if (loss_param == "automult") and (use_boundary is not None):
-            model_data_full = self._sweep(
-                value,
-                col=loss_param,
-                conv_failure=conv_failure,
-                mode=mode,
-                use_boundary=use_boundary,
-            )
-        else:
-            model_data_full = self._sweep(
-                value, col=loss_param, conv_failure=conv_failure, mode=mode
-            )
-        n_zeros = len(self.reactionTime) - np.count_nonzero(model_data_full)
-        if loss_type == "mle":
-            n_zeros *= 1000
-        human_data_full = self.reactionTime
-
-        model_data = model_data_full[model_data_full != 0]
-        human_data = human_data_full[model_data_full != 0]
-
-        m_log_data = np.log(model_data)
-        h_log_data = np.log(human_data)
-
-        model_resc = (m_log_data - np.min(m_log_data)) / np.ptp(m_log_data)
-        human_resc = (h_log_data - np.min(h_log_data)) / np.ptp(h_log_data)
-        if return_data and not split_by_response:
-            return model_resc, human_resc
-
-        if split_by_response:
-            human_responses = self.Response.astype("bool")[model_data_full != 0]
-
-            if return_data:
-                return model_resc, human_resc, human_responses
-
-            model_split = {
-                True: model_resc[human_responses],
-                False: model_resc[~human_responses],
-            }
-
-            human_split = {
-                True: human_resc[human_responses],
-                False: human_resc[~human_responses],
-            }
-
-            if loss_type == "jsd":
-                terms = []
-                for i in [True, False]:
-                    terms.append(jensenshannon(human_split[i], model_split[i]))
-            elif loss_type == "mse":
-                terms = []
-                for i in [True, False]:
-                    terms.append(
-                        (np.mean(human_split[i]) - np.mean(model_split[i])) ** 2
-                    )
-            elif loss_type == "mle":
-                lkls_split = {
-                    True: tb.emp_lkl_mkii(model_split[True], human_split[True]),
-                    False: tb.emp_lkl_mkii(model_split[False], human_split[False]),
-                }
-
-                lkls = np.zeros(human_data.shape)
-                lkls[human_responses] = lkls_split[True]
-                lkls[~human_responses] = lkls_split[False]
-                self.lkls = lkls
-
-                terms = []
-                for i in [True, False]:
-                    terms.append(lkls_split[i])
-
-            elif loss_type == "gaussian_mle":
-                lkls_split = {
-                    True: tb.gaussian_lkl(model_split[True], human_split[True]),
-                    False: tb.gaussian_lkl(model_split[False], human_split[False]),
-                }
-
-                lkls = np.zeros(human_data.shape)
-                lkls[human_responses] = lkls_split[True]
-                lkls[~human_responses] = lkls_split[False]
-                self.lkls = lkls
-
-                terms = []
-                for i in [True, False]:
-                    terms.append(lkls_split[i])
-
-            term1 = sum(terms)
-
-        else:
-            if loss_type == "jsd":
-                term1 = jensenshannon(human_resc, model_resc)
-            elif loss_type == "mse":
-                term1 = (np.mean(human_resc) - np.mean(model_resc)) ** 2
-            elif loss_type == "mle":
-                lkls = tb.emp_lkl_mkii(human_resc, model_resc)
-                term1 = lkls
-
-        if penalize_zeros:
-            loss = term1 + n_zeros
-        else:
-            loss = term1
-
-        return loss
-
-    def optimize_params_2d(
-        self,
-        init_guess=None,
-        verbose=True,
-        loss_type="mle",
-        split_by_response=True,
-        penalize_zeros=True,
-        annealing_step=True,
-    ):
-        assert self.is_fit
-
-        if init_guess is not None:
-            init_guess = init_guess
-        else:
-            init_guess = np.array([0.01, 5])
-
-        hyperparams = {"x0": init_guess, "stepsize": 0.1, "T": 1, "niter_success": 100}
-
-        loss = lambda x: self.loss_function(
-            x[0],
+        def loss_function(
+            self,
+            value,
             loss_param="automult",
-            loss_type=loss_type,
-            penalize_zeros=penalize_zeros,
-            mode="all",
-            split_by_response=split_by_response,
-            use_boundary=x[1],
-        )
-
-        opt_res = basinhopping(
-            loss,
-            **hyperparams,
-            minimizer_kwargs={"bounds": [(1e-4, 1), (1e-4, 10)]},
-            disp=verbose
-        )
-
-        if annealing_step:
-            optt_res = dual_annealing(
-                loss,
-                [
-                    (
-                        opt_res.x[0] - 0.5 * opt_res.x[0],
-                        opt_res.x[0] + 0.5 * opt_res.x[0],
-                    ),
-                    (
-                        opt_res.x[1] - 0.5 * opt_res.x[1],
-                        opt_res.x[1] + 0.5 * opt_res.x[1],
-                    ),
-                ],
-                x0=opt_res.x,
-                callback=print,
-                maxiter=100,
-            )
-
-            res = optt_res
-        else:
-            res = opt_res
-
-        self.opt_automult_param2d = res.x
-        self.opt_automult_error2d = res.fun
-
-    def optimize_params(
-        self,
-        params=["automult", "online_rt", "ei_rt", "wei_rt"],
-        verbose=False,
-        loss_type="jsd",
-        split_by_response=True,
-        penalize_zeros=True,
-        annealing_step=True,
-        mode="base",
-        add_auto_bound=None,
-    ):
-        """
-        Parameters:
-        ------------
-        Optimizes model parameters to match distribution of human data.
-        Hyperparameters are not function arguments, but can be changed below
-
-        params : list of str
-            "automult" : derivative parameter for FlexMM model "online_bound":
-            bound parameter for FlexMM model "ei_bound": bound parameter for
-            vanilla EI model "wei_bound" : bound parameter for weighted EI model
-
-        loss_type : str
-            "jsd" : uses Jensen-Shannon Divergence
-            "mle" : uses empirical likelihood function
-                from model data CDF
-            "mse" : uses the mean-square error
-            "gaussian_mle" : uses a likelihood function that assumes the
-                model distribution is Gaussian
-        """
-        assert self.is_fit
-
-        if mode == "base":
-            assert hasattr(
-                self, "BaseModel"
-            ), "Must run BaseModel before optimizing params"
-
-        self.opt_params = {}
-        self.opt_error = {}
-
-        auto_mult_init = np.array([0.01])
-
-        hyperparams = {
-            "automult": {
-                "x0": auto_mult_init,
-                "stepsize": 0.005,
-                "T": 0.01,
-                "niter_success": 100,
-            },
-            "online_rt": {"x0": 5, "stepsize": 0.1, "T": 1, "niter_success": 100},
-            "ei_rt": {"x0": 5, "stepsize": 0.1, "T": 1, "niter_success": 100},
-            "wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 100},
-        }
-
-        if loss_type == "mle":
-            hyperparams = {
-                "automult": {
-                    "x0": auto_mult_init,
-                    "stepsize": 0.005,
-                    "T": 100,
-                    "niter_success": 100,
-                },
-                "online_rt": {"x0": 5, "stepsize": 0.1, "T": 100, "niter_success": 100},
-                "ei_rt": {"x0": 5, "stepsize": 0.1, "T": 100, "niter_success": 100},
-                "wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 100},
-            }
-
-        if loss_type == "mse":
-            hyperparams.update(
-                {"wei_rt": {"x0": 2, "stepsize": 1, "T": 0.001, "niter_success": 20}}
-            )
-
-        for param in params:
-            if verbose:
-                print(
-                    "\n Running basinhopping optimization for parameter: {} \n".format(
-                        param
-                    )
-                )
-            if add_auto_bound is not None:
-                loss = lambda x: self.loss_function(
-                    x,
-                    loss_param=param,
-                    loss_type=loss_type,
-                    penalize_zeros=penalize_zeros,
+            loss_type="jsd",
+            penalize_zeros=True,
+            conv_failure="argmax",
+            mode="base",
+            use_boundary=None,
+            return_data=False,
+            split_by_response=True,
+        ):
+            if (loss_param == "automult") and (use_boundary is not None):
+                model_data_full = self._sweep(
+                    value,
+                    col=loss_param,
+                    conv_failure=conv_failure,
                     mode=mode,
-                    split_by_response=split_by_response,
-                    use_boundary=add_auto_bound,
+                    use_boundary=use_boundary,
                 )
             else:
-                loss = lambda x: self.loss_function(
-                    x,
-                    loss_param=param,
-                    loss_type=loss_type,
-                    penalize_zeros=penalize_zeros,
-                    mode=mode,
-                    split_by_response=split_by_response,
+                model_data_full = self._sweep(
+                    value, col=loss_param, conv_failure=conv_failure, mode=mode
                 )
-            cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
+            n_zeros = len(self.reactiontime) - np.count_nonzero(model_data_full)
+            if loss_type == "mle":
+                n_zeros *= 1000
+            human_data_full = self.reactiontime
+
+            model_data = model_data_full[model_data_full != 0]
+            human_data = human_data_full[model_data_full != 0]
+
+            m_log_data = np.log(model_data)
+            h_log_data = np.log(human_data)
+
+            model_resc = (m_log_data - np.min(m_log_data)) / np.ptp(m_log_data)
+            human_resc = (h_log_data - np.min(h_log_data)) / np.ptp(h_log_data)
+            if return_data and not split_by_response:
+                return model_resc, human_resc
+
+            if split_by_response:
+                human_responses = self.response.astype("bool")[model_data_full != 0]
+
+                if return_data:
+                    return model_resc, human_resc, human_responses
+
+                model_split = {
+                    true: model_resc[human_responses],
+                    false: model_resc[~human_responses],
+                }
+
+                human_split = {
+                    true: human_resc[human_responses],
+                    false: human_resc[~human_responses],
+                }
+
+                if loss_type == "jsd":
+                    terms = []
+                    for i in [true, false]:
+                        terms.append(jensenshannon(human_split[i], model_split[i]))
+                elif loss_type == "mse":
+                    terms = []
+                    for i in [true, false]:
+                        terms.append(
+                            (np.mean(human_split[i]) - np.mean(model_split[i])) ** 2
+                        )
+                elif loss_type == "mle":
+                    lkls_split = {
+                        true: tb.emp_lkl_mkii(model_split[true], human_split[true]),
+                        false: tb.emp_lkl_mkii(model_split[false], human_split[false]),
+                    }
+
+                    lkls = np.zeros(human_data.shape)
+                    lkls[human_responses] = lkls_split[true]
+                    lkls[~human_responses] = lkls_split[false]
+                    self.lkls = lkls
+
+                    terms = []
+                    for i in [true, false]:
+                        terms.append(lkls_split[i])
+
+                elif loss_type == "gaussian_mle":
+                    lkls_split = {
+                        true: tb.gaussian_lkl(model_split[true], human_split[true]),
+                        false: tb.gaussian_lkl(model_split[false], human_split[false]),
+                    }
+
+                    lkls = np.zeros(human_data.shape)
+                    lkls[human_responses] = lkls_split[true]
+                    lkls[~human_responses] = lkls_split[false]
+                    self.lkls = lkls
+
+                    terms = []
+                    for i in [true, false]:
+                        terms.append(lkls_split[i])
+
+                term1 = sum(terms)
+
+            else:
+                if loss_type == "jsd":
+                    term1 = jensenshannon(human_resc, model_resc)
+                elif loss_type == "mse":
+                    term1 = (np.mean(human_resc) - np.mean(model_resc)) ** 2
+                elif loss_type == "mle":
+                    lkls = tb.emp_lkl_mkii(human_resc, model_resc)
+                    term1 = lkls
+
+            if penalize_zeros:
+                loss = term1 + n_zeros
+            else:
+                loss = term1
+
+            return loss
+
+        def optimize_params_2d(
+            self,
+            init_guess=none,
+            verbose=true,
+            loss_type="mle",
+            split_by_response=true,
+            penalize_zeros=true,
+            annealing_step=true,
+        ):
+            assert self.is_fit
+
+            if init_guess is not none:
+                init_guess = init_guess
+            else:
+                init_guess = np.array([0.01, 5])
+
+            hyperparams = {
+                "x0": init_guess,
+                "stepsize": 0.1,
+                "t": 1,
+                "niter_success": 100,
+            }
+
+            loss = lambda x: self.loss_function(
+                x[0],
+                loss_param="automult",
+                loss_type=loss_type,
+                penalize_zeros=penalize_zeros,
+                mode="all",
+                split_by_response=split_by_response,
+                use_boundary=x[1],
+            )
+
             opt_res = basinhopping(
                 loss,
-                **hyperparams[param],
-                minimizer_kwargs={"bounds": [(1e-4, 10)]},
-                disp=verbose,
-                callback=cbf
+                **hyperparams,
+                minimizer_kwargs={"bounds": [(1e-4, 1), (1e-4, 10)]},
+                disp=verbose
             )
-            if verbose:
-                print("\n \t Running annealing step ... ")
+
             if annealing_step:
-                if param != "automult":
-                    optt_res = dual_annealing(
-                        loss,
-                        [
-                            (
-                                opt_res.x[0] - 0.5 * opt_res.x[0],
-                                opt_res.x[0] + 0.5 * opt_res.x[0],
-                            )
-                        ],
-                        x0=opt_res.x,
-                        callback=print,
-                        maxiter=100,
-                    )
-                else:
-                    optt_res = dual_annealing(
-                        loss,
-                        [
-                            (
-                                opt_res.x[0] - 0.1 * opt_res.x[0],
-                                opt_res.x[0] + 0.1 * opt_res.x[0],
-                            )
-                        ],
-                        x0=opt_res.x,
-                        callback=print,
-                        maxiter=20,
-                    )
+                optt_res = dual_annealing(
+                    loss,
+                    [
+                        (
+                            opt_res.x[0] - 0.5 * opt_res.x[0],
+                            opt_res.x[0] + 0.5 * opt_res.x[0],
+                        ),
+                        (
+                            opt_res.x[1] - 0.5 * opt_res.x[1],
+                            opt_res.x[1] + 0.5 * opt_res.x[1],
+                        ),
+                    ],
+                    x0=opt_res.x,
+                    callback=print,
+                    maxiter=100,
+                )
+
                 res = optt_res
             else:
                 res = opt_res
 
-            self.opt_error[param] = res.fun
-            self.opt_params[param] = res.x[0]
+            self.opt_automult_param2d = res.x
+            self.opt_automult_error2d = res.fun
 
-    def _sweep(
-        self,
-        value,
-        col="automult",
-        conv_failure="argmax",
-        mode="base",
-        use_boundary=None,
-    ):
-        """
-        Parameters:
-        -----------
-        value : float
-        col : str
-            "automult" : derivative parameter for FlexMM model
-            "online_bound": bound parameter for FlexMM model
-            "ei_bound": bound parameter for vanilla EI model
-            "wei_bound" : bound parameter for weighted EI model
+        def optimize_params(
+            self,
+            params=["automult", "online_rt", "ei_rt", "wei_rt"],
+            verbose=false,
+            loss_type="jsd",
+            split_by_response=true,
+            penalize_zeros=true,
+            annealing_step=true,
+            mode="base",
+            add_auto_bound=none,
+        ):
+            """
+            parameters:
+            ------------
+            optimizes model parameters to match distribution of human data.
+            hyperparameters are not function arguments, but can be changed below
 
-        Returns:
-        ---------
-        rts : array of reaction times
-        """
-        if mode == "base":
-            assert hasattr(self, "BaseModel")
+            params : list of str
+                "automult" : derivative parameter for flexmm model "online_bound":
+                bound parameter for flexmm model "ei_bound": bound parameter for
+                vanilla ei model "wei_bound" : bound parameter for weighted ei model
 
-            if col == "automult":
-                if use_boundary is not None:
-                    rts = self.BaseModel._get_rt_from_deriv(
-                        value,
-                        return_mean=True,
-                        failure_mode=conv_failure,
-                        use_boundary=use_boundary,
+            loss_type : str
+                "jsd" : uses jensen-shannon divergence
+                "mle" : uses empirical likelihood function
+                    from model data cdf
+                "mse" : uses the mean-square error
+                "gaussian_mle" : uses a likelihood function that assumes the
+                    model distribution is gaussian
+            """
+            assert self.is_fit
+
+            if mode == "base":
+                assert hasattr(
+                    self, "basemodel"
+                ), "must run basemodel before optimizing params"
+
+            self.opt_params = {}
+            self.opt_error = {}
+
+            auto_mult_init = np.array([0.01])
+
+            hyperparams = {
+                "automult": {
+                    "x0": auto_mult_init,
+                    "stepsize": 0.005,
+                    "t": 0.01,
+                    "niter_success": 100,
+                },
+                "online_rt": {"x0": 5, "stepsize": 0.1, "t": 1, "niter_success": 100},
+                "ei_rt": {"x0": 5, "stepsize": 0.1, "t": 1, "niter_success": 100},
+                "wei_rt": {"x0": 2, "stepsize": 1, "t": 0.001, "niter_success": 100},
+            }
+
+            if loss_type == "mle":
+                hyperparams = {
+                    "automult": {
+                        "x0": auto_mult_init,
+                        "stepsize": 0.005,
+                        "t": 100,
+                        "niter_success": 100,
+                    },
+                    "online_rt": {
+                        "x0": 5,
+                        "stepsize": 0.1,
+                        "t": 100,
+                        "niter_success": 100,
+                    },
+                    "ei_rt": {"x0": 5, "stepsize": 0.1, "t": 100, "niter_success": 100},
+                    "wei_rt": {
+                        "x0": 2,
+                        "stepsize": 1,
+                        "t": 0.001,
+                        "niter_success": 100,
+                    },
+                }
+
+            if loss_type == "mse":
+                hyperparams.update(
+                    {
+                        "wei_rt": {
+                            "x0": 2,
+                            "stepsize": 1,
+                            "t": 0.001,
+                            "niter_success": 20,
+                        }
+                    }
+                )
+
+            for param in params:
+                if verbose:
+                    print(
+                        "\n running basinhopping optimization for parameter: {} \n".format(
+                            param
+                        )
+                    )
+                if add_auto_bound is not none:
+                    loss = lambda x: self.loss_function(
+                        x,
+                        loss_param=param,
+                        loss_type=loss_type,
+                        penalize_zeros=penalize_zeros,
+                        mode=mode,
+                        split_by_response=split_by_response,
+                        use_boundary=add_auto_bound,
                     )
                 else:
-                    rts = self.BaseModel._get_rt_from_deriv(
-                        value, return_mean=True, failure_mode=conv_failure
+                    loss = lambda x: self.loss_function(
+                        x,
+                        loss_param=param,
+                        loss_type=loss_type,
+                        penalize_zeros=penalize_zeros,
+                        mode=mode,
+                        split_by_response=split_by_response,
                     )
-            if col == "online_rt":
-                rts = self.BaseModel._get_rt_from_boundary(
-                    value, param="logits", return_mean=True
+                cbf = lambda x, f, accept: true if (f < (1e-3)) and (accept) else false
+                opt_res = basinhopping(
+                    loss,
+                    **hyperparams[param],
+                    minimizer_kwargs={"bounds": [(1e-4, 10)]},
+                    disp=verbose,
+                    callback=cbf
                 )
-            elif col == "ei_rt":
-                rts = self.BaseModel._get_rt_from_boundary(
-                    value, param="ei_logits", return_mean=True
-                )
-            elif col == "wei_rt":
-                rts = self.BaseModel._get_rt_from_boundary(
-                    value, param="wei_logits", return_mean=True
-                )
-        else:
-            if col == "automult":
-                if use_boundary is not None:
-                    rts = dynamics._get_rt_from_deriv(
-                        self.smooth_logits,
-                        self.logit_deriv,
-                        value,
-                        return_mean=True,
-                        failure_mode=conv_failure,
-                        mean_axis=(0, -1),
-                        use_boundary=use_boundary,
-                    )
+                if verbose:
+                    print("\n \t running annealing step ... ")
+                if annealing_step:
+                    if param != "automult":
+                        optt_res = dual_annealing(
+                            loss,
+                            [
+                                (
+                                    opt_res.x[0] - 0.5 * opt_res.x[0],
+                                    opt_res.x[0] + 0.5 * opt_res.x[0],
+                                )
+                            ],
+                            x0=opt_res.x,
+                            callback=print,
+                            maxiter=100,
+                        )
+                    else:
+                        optt_res = dual_annealing(
+                            loss,
+                            [
+                                (
+                                    opt_res.x[0] - 0.1 * opt_res.x[0],
+                                    opt_res.x[0] + 0.1 * opt_res.x[0],
+                                )
+                            ],
+                            x0=opt_res.x,
+                            callback=print,
+                            maxiter=20,
+                        )
+                    res = optt_res
                 else:
-                    rts = dynamics._get_rt_from_deriv(
-                        self.smooth_logits,
-                        self.logit_deriv,
+                    res = opt_res
+
+                self.opt_error[param] = res.fun
+                self.opt_params[param] = res.x[0]
+
+        def _sweep(
+            self,
+            value,
+            col="automult",
+            conv_failure="argmax",
+            mode="base",
+            use_boundary=none,
+        ):
+            """
+            parameters:
+            -----------
+            value : float
+            col : str
+                "automult" : derivative parameter for flexmm model
+                "online_bound": bound parameter for flexmm model
+                "ei_bound": bound parameter for vanilla ei model
+                "wei_bound" : bound parameter for weighted ei model
+
+            returns:
+            ---------
+            rts : array of reaction times
+            """
+            if mode == "base":
+                assert hasattr(self, "basemodel")
+
+                if col == "automult":
+                    if use_boundary is not none:
+                        rts = self.basemodel._get_rt_from_deriv(
+                            value,
+                            return_mean=true,
+                            failure_mode=conv_failure,
+                            use_boundary=use_boundary,
+                        )
+                    else:
+                        rts = self.basemodel._get_rt_from_deriv(
+                            value, return_mean=true, failure_mode=conv_failure
+                        )
+                if col == "online_rt":
+                    rts = self.basemodel._get_rt_from_boundary(
+                        value, param="logits", return_mean=true
+                    )
+                elif col == "ei_rt":
+                    rts = self.basemodel._get_rt_from_boundary(
+                        value, param="ei_logits", return_mean=true
+                    )
+                elif col == "wei_rt":
+                    rts = self.basemodel._get_rt_from_boundary(
+                        value, param="wei_logits", return_mean=true
+                    )
+            else:
+                if col == "automult":
+                    if use_boundary is not none:
+                        rts = dynamics._get_rt_from_deriv(
+                            self.smooth_logits,
+                            self.logit_deriv,
+                            value,
+                            return_mean=true,
+                            failure_mode=conv_failure,
+                            mean_axis=(0, -1),
+                            use_boundary=use_boundary,
+                        )
+                    else:
+                        rts = dynamics._get_rt_from_deriv(
+                            self.smooth_logits,
+                            self.logit_deriv,
+                            value,
+                            return_mean=true,
+                            failure_mode=conv_failure,
+                            mean_axis=(0, -1),
+                        )
+                if col == "online_rt":
+                    rts = dynamics._get_rt_from_boundary(
+                        self.logits,
                         value,
-                        return_mean=True,
-                        failure_mode=conv_failure,
+                        return_mean=true,
+                        output_flat=false,
                         mean_axis=(0, -1),
                     )
-            if col == "online_rt":
-                rts = dynamics._get_rt_from_boundary(
-                    self.logits,
-                    value,
-                    return_mean=True,
-                    output_flat=False,
-                    mean_axis=(0, -1),
-                )
-            elif col == "ei_rt":
-                rts = dynamics._get_rt_from_boundary(
-                    self.ei_logits,
-                    value,
-                    return_mean=True,
-                    output_flat=False,
-                    mean_axis=(0, -1),
-                )
-            elif col == "wei_rt":
-                rts = dynamics._get_rt_from_boundary(
-                    self.wei_logits,
-                    value,
-                    return_mean=True,
-                    output_flat=False,
-                    mean_axis=(0, -1),
-                )
+                elif col == "ei_rt":
+                    rts = dynamics._get_rt_from_boundary(
+                        self.ei_logits,
+                        value,
+                        return_mean=true,
+                        output_flat=false,
+                        mean_axis=(0, -1),
+                    )
+                elif col == "wei_rt":
+                    rts = dynamics._get_rt_from_boundary(
+                        self.wei_logits,
+                        value,
+                        return_mean=true,
+                        output_flat=false,
+                        mean_axis=(0, -1),
+                    )
 
-        return rts
+            return rts
 
     def run_dynamics_model(
         self,
@@ -815,9 +815,30 @@ class Response:
         n_pseudocoords=4,
         layer=1,
         random_init=False,
-        n_pca=0.95,
+        n_pca=6,
     ):
+        """
+        Parameters:
+        ------------
+        n_trials : int
+            number of trials that the model is run, different trials because
+            of different pseudocoords and (potentially) different initializations
+        smooth : int
+            1 if applying spatial smoothing, 0 if ablating
+        noisy_init : bool
+            True if sampling from participant pmap for intial guess, else use MAP
+            segment classes
+        n_pseudocoords : int
+            The number of pseudocoords around each grid, the number of points being
+            averaged is n^2 given n pseudocoords
+        layer = int
+            The layer to use in FlexMM
+        random_init = False
+            False if standard initialization, True if ablating
+        n_pca = int
+            Default is 6
 
+        """
         self.fit()
 
         self.Models = []
@@ -865,15 +886,6 @@ class Response:
 
             n_iter.append(Model.n_iter)
 
-            conv_logits = Model.logits[..., -1].reshape(-1)
-
-            ei_noise = iqr(conv_logits, rng=(25, 75))
-            wei_noise = iqr(conv_logits, rng=(10, 90))
-
-            Model.get_ei_info(
-                pairs, weighted=True, noise=ei_noise, weighted_noise=wei_noise
-            )
-
             self.Models.append(Model)
 
             # check logits for infs
@@ -893,16 +905,9 @@ class Response:
                 Model.logits = np.pad(
                     Model.logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
                 )
-                Model.ei_logits = np.pad(
-                    Model.ei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
-                )
-                Model.wei_logits = np.pad(
-                    Model.wei_logits, [(0, 0), (0, 0), (0, pad_length)], mode="edge"
-                )
+
         self.seg_flags = np.asarray([Model.sfs_t for Model in self.Models])
         self.logits = np.asarray([Model.logits for Model in self.Models])
-        self.ei_logits = np.asarray([Model.ei_logits for Model in self.Models])
-        self.wei_logits = np.asarray([Model.wei_logits for Model in self.Models])
 
         self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
 
@@ -914,6 +919,10 @@ class Response:
     def run_multilayer_model(
         self, n_layers=5, smooth=1, noisy_init=True, n_pseudocoords=4
     ):
+        """
+        Not used but allows for the possibility of model fitting across
+        multiple layers
+        """
         self.fit()
 
         self.Models = []
