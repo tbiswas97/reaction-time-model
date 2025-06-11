@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from glob import glob as glob
 from natsort import natsorted as ns
 from Response import Response as Res
+import Model
+from Result import Result as Result
 from SegmentationMap import SegmentationMap as SM
 import analysis
 
@@ -699,7 +701,7 @@ def df_from_file(
 
 if __name__ == "__main__":
     files = ns(glob("data/data_processing/*"))
-    Response_objs = []
+    # Response_objs = []
 
     for i, file in enumerate(files[:]):
         print("Processing {}:{}".format(i, file))
@@ -707,25 +709,52 @@ if __name__ == "__main__":
         R.fit()
         R.run_dynamics_model(n_trials=10, n_pseudocoords=10)
 
-        R.optimize_params(
-            loss_type="mse",
-            verbose=True,
-            penalize_zeros=True,
-            split_by_response=True,
-            annealing_step=True,
-            mode="all",
-            params=["automult", "online_rt", "ei_rt", "wei_rt"],
-        )
+    # R.optimize_params(
+    # loss_type="mse",
+    # verbose=True,
+    # penalize_zeros=True,
+    # split_by_response=True,
+    # annealing_step=True,
+    # mode="all",
+    # params=["automult", "online_rt", "ei_rt", "wei_rt"],
+    # )
 
-        R.opt_automult_param2d = np.array(
-            [R.opt_params["automult"], R.opt_params["online_rt"]]
-        )
+    # R.opt_automult_param2d = np.array(
+    # [R.opt_params["automult"], R.opt_params["online_rt"]]
+    # )
 
-        for i in range(2):
-            R.optimize_params_2d(init_guess=R.opt_automult_param2d, loss_type="mse")
+    # for i in range(2):
+    # R.optimize_params_2d(init_guess=R.opt_automult_param2d, loss_type="mse")
 
-        filename = R.filename.split("/")[-1].split(".")[0]
+    # filename = R.filename.split("/")[-1].split(".")[0]
 
-        import_utils._pickle(
-            R, "response_objs/mse/{}_Response_obj.pkl".format(filename)
-        )
+    # import_utils._pickle(
+    # R, "response_objs/mse/{}_Response_obj.pkl".format(filename)
+    # )
+    response_files = ns(glob("response_objs/mse/*.pkl"))[:-1]
+    model_files = ns(glob("model_objs/mle/*.pkl"))
+
+    assert len(response_files) == len(model_files)
+
+    dfs = []
+
+    for i, rf, mf in zip(range(len(response_files)), response_files, model_files):
+        print("CROSSVALIDATING FILE {}".format(i))
+        fit_model = import_utils._load(mf)
+        cv = Model.CrossValidator(rf)
+
+        cv.set_opt_error(fit_model.opt_error)
+        cv.set_opt_params(fit_model.opt_params)
+
+        n_splits = 5
+        cv.get_test_train_split(n_splits)
+
+        for i in range(n_splits):
+            cv._train(i)
+            cv._test(i)
+
+        dfs.append(cv.cross_val_summary())
+
+    out = pd.concat(dfs, ignore_index=True, axis=0)
+
+    out.to_csv("model_fit_mle_crossval_summary.csv")
