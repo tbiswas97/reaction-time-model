@@ -909,8 +909,6 @@ class Response:
         self.seg_flags = np.asarray([Model.sfs_t for Model in self.Models])
         self.logits = np.asarray([Model.logits for Model in self.Models])
 
-        self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
-
         diff = lambda x: (x[-1] - x[0]) / len(x)
         self.logit_deriv = np.apply_along_axis(
             diff, -1, sliding_window_view(self.logits, 3, axis=-1)
