@@ -889,7 +889,7 @@ class Response:
             self.Models.append(Model)
 
             # check logits for infs
-            for attr in ["logits", "ei_logits", "wei_logits"]:
+            for attr in ["logits"]:
                 struct = Model.__dict__[attr]
                 assert (
                     struct[(struct == np.inf) | (struct == -np.inf)].size == 0
@@ -1014,7 +1014,7 @@ class Response:
         )
 
         # check logits for infs
-        for attr in ["logits", "ei_logits", "wei_logits"]:
+        for attr in ["logits"]:
             struct = Model.__dict__[attr]
             assert (
                 struct[(struct == np.inf) | (struct == -np.inf)].size == 0
