@@ -7,6 +7,7 @@ sys.path.append("../src/")
 import import_utils
 import dynamics
 import toolbox as tb
+from numpy.lib.stride_tricks import sliding_window_view
 
 from scipy.optimize import basinhopping
 from scipy.optimize import dual_annealing
@@ -16,16 +17,22 @@ from sklearn.model_selection import KFold
 
 
 class Model:
-
-    def __init__(
-        self,
-        ResponseObj_file,
-        params_to_fit=["automult_2d", "automult", "logits", "ei_logits", "wei_logits"],
-    ):
+    def __init__(self, ResponseObj_file, key="ai"):
         """
         Collects only the output of segmentation probabilities per iteration of
         the Model. Image information is not included, but optimization functions
         are the same.
+
+        This class contains 7 types of models:
+
+        - Approx. inference model
+            - fit with $b$ "ai_b"
+            - fit with $\lambda$ "ai_lambda"
+            - fit with both "ai_both"
+        - Standard evidence integration model "ei"
+        - Weighted evidence integration models:
+            - Weighted starting point "ei_wt_drift"
+            - Weighted drift "ei_wt_sp"
 
         Parameters:
         ------------
@@ -35,15 +42,9 @@ class Model:
 
         Attributes:
         ------------
-        self.logits
-        self.logits_deriv
-        self.smooth_logits
-        self.ei_logits
-        self.wei_logits
-        self.sfs_t
+        self.key : str
+            The type of model that is being fit
         """
-
-        sns.set_context("talk")
 
         if type(ResponseObj_file) == str:
             assert ".pkl" in ResponseObj_file, "Can only handle pickled inputs"
@@ -51,6 +52,7 @@ class Model:
         else:
             Response = ResponseObj_file
 
+        self.key = key
         self.distances = np.asarray([Trial.distances for Trial in Response.Models])
 
         self.subject = Response.fileinfo["subject"]
@@ -60,9 +62,10 @@ class Model:
         self.logits = Response.logits
         self.logits_deriv = Response.logit_deriv
         self.smooth_logits = Response.smooth_logits
-        self.ei_logits = Response.ei_logits
-        self.wei_logits = Response.wei_logits
         self.sfs_t = Response.seg_flags
+        num_samples = self.logits.shape[-1]
+        self.flat_logits = self.logits.reshape((-1, num_samples))
+        self.noise_arr = np.random.normal(0, 1, size=self.flat_logits.shape)
 
         self.human_rt = Response.reactionTime
         self.human_responses = Response.Response.astype("bool")
@@ -70,121 +73,167 @@ class Model:
 
         logit_ig = iqr(self.logits.reshape(-1), rng=(1, 2))
         ei_logit_ig = iqr(self.ei_logits.reshape(-1), rng=(1, 2))
-        wei_logit_ig = iqr(self.wei_logits.reshape(-1), rng=(1, 2))
+        ei_wt_drift_ig = iqr(self.wei_logits.reshape(-1), rng=(1, 2))
+        ei_wt_sp_ig = iqr(self.wei_logits.reshape(-1), rng=(1, 2))
 
         self.hyperparams = {
-            "automult": {
+            "ai_lambda": {
                 "x0": np.array([0.01]),
                 "stepsize": 0.005,
                 "T": 100,
                 "niter_success": 100,
             },
-            "logits": {"x0": logit_ig, "stepsize": 1, "T": 100, "niter_success": 100},
-            "ei_logits": {
+            "ai_b": {"x0": logit_ig, "stepsize": 1, "T": 100, "niter_success": 100},
+            "ei": {
                 "x0": ei_logit_ig,
                 "stepsize": 1,
                 "T": 100,
                 "niter_success": 100,
             },
-            "wei_logits": {
-                "x0": wei_logit_ig,
+            "ei_wt_drift": {
+                "x0": ei_wt_drift_ig,
                 "stepsize": 1,
                 "T": 0.001,
                 "niter_success": 100,
             },
         }
 
-        self.params_to_fit = params_to_fit
-
         self.rt_dict = {k: None for k in self.params_to_fit}
 
         self.opt_params = {}
         self.opt_error = {}
 
+    # make evidence integration
+    def int_noisy_evidence(self, lam, noise):
+        """
+        Numerically integrates the DDM
+
+        Parameters:
+        ------------
+        lam : float
+            The drift gain
+        noise : float
+            The noise gain (multiplied to Wiener Process)
+        """
+        num_samples = self.logits.shape[-1]
+        flat_logits = self.logits.reshape((-1, num_samples))
+        flat_sfs_t = self.sfs_t.reshape((-1, num_samples))
+        canvas = np.zeros(flat_logits.shape)
+
+        # standard ei
+        if "ei" in self.key:
+            drift_rate_arr = flat_logits[:, -1] / num_samples
+            # weighted drift
+            if self.key == "ei_wt_drift":
+                temp = lam * drift_rate_arr + noise * self.arr
+                # Numerical integration step
+                temp = np.cumsum(temp, axis=1)
+                canvas[1:, :] = temp[:-1, :]
+            # weighted prior and weighted drift
+            elif self.key == "ei_wt_both":
+                temp = lam * drift_rate_arr + noise * self.arr
+                temp = np.cumsum(temp, axis=1)
+                canvas[1:, :] = temp[:-1, :]
+                canvas = canvas + drift_rate_arr
+            # standard ei
+            elif self.key == "ei":
+                pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
+                neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
+                self.global_drift_rate = [pos_drift_rate, neg_drift_rate]
+                decision_drift = np.zeros(flat_logits[:, -1].shape)
+                decision_drift[flat_sfs_t[:, -1]] += pos_drift_rate
+                decision_drift[~flat_sfs_t[:, -1]] += neg_drift_rate
+                decision_drift = decision_drift[:, np.newaxis] / num_samples
+                temp = lam * decision_drift + noise * self.noise_arr
+                temp = np.cumsum(temp, axis=1)
+                canvas[1:, :] = temp[:-1, :]
+                # standard ei and weighted prior
+                if self.key == "ei_wt_sp":
+                    canvas = canvas + drift_rate_arr
+
+            evidence = canvas.reshape(self.logits.shape)
+
+        self.evidence = evidence
+
+        # starting point weighted
+
+        # drift weighted
+        # both weighted
+
     def _sweep(
         self,
-        value,
-        param="automult",
+        values,
         conv_failure="argmax",
-        use_boundary=None,
         add_one=False,
     ):
         """
         Parameters:
         -----------
-        value : float
-        param : str
-            "automult" : derivative parameter for FlexMM model
-            "online_bound": bound parameter for FlexMM model
-            "ei_bound": bound parameter for vanilla EI model
-            "wei_bound" : bound parameter for weighted EI model
-
+        values : list
+            Order is [$b$,$\lambda$]
         Returns:
         ---------
         rts : array of reaction times
         """
-        if "automult" in param:
-            if use_boundary is not None:
+        if "ei" in self.key:
+            self.int_noisy_evidence(self, values[1], 5)
+            rts = dynamics._get_rt_from_boundary(
+                self.evidence,
+                values[0],
+                return_mean=True,
+                output_flat=False,
+                mean_axis=(0, -1),
+                add_one=add_one,
+            )
+        elif self.key == "ai_b":
+            self.evidence = self.logits
+            rts = dynamics._get_rt_from_boundary(
+                self.evidence,
+                values[0],
+                return_mean=True,
+                output_flat=False,
+                mean_axis=(0, -1),
+                add_one=add_one,
+            )
+        elif (self.key == "ai_lambda") or (self.key == "ai_both"):
+            self.evidence = self.logits
+            self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
+            diff = lambda x: (x[-1] - x[0]) / len(x)
+            self.logit_deriv = np.apply_along_axis(
+                diff, -1, sliding_window_view(self.logits, 3, axis=-1)
+            )
+            if self.key == "ai_lambda":
                 rts = dynamics._get_rt_from_deriv(
                     self.smooth_logits,
-                    self.logits_deriv,
-                    value,
+                    self.logit_deriv,
+                    values[1],
+                    output_flat=False,
                     return_mean=True,
                     failure_mode=conv_failure,
                     mean_axis=(0, -1),
-                    use_boundary=use_boundary,
+                    use_boundary=None,
                     add_one=add_one,
                 )
-            else:
+            if self.key == "ai_both":
                 rts = dynamics._get_rt_from_deriv(
                     self.smooth_logits,
-                    self.logits_deriv,
-                    value,
+                    self.logit_deriv,
+                    values[1],
+                    output_flat=False,
                     return_mean=True,
                     failure_mode=conv_failure,
                     mean_axis=(0, -1),
+                    use_boundary=values[0],
                     add_one=add_one,
                 )
-        if param == "logits":
-            rts = dynamics._get_rt_from_boundary(
-                self.logits,
-                value,
-                return_mean=True,
-                output_flat=False,
-                mean_axis=(0, -1),
-                add_one=add_one,
-            )
-        elif param == "ei_logits":
-            rts = dynamics._get_rt_from_boundary(
-                self.ei_logits,
-                value,
-                return_mean=True,
-                output_flat=False,
-                mean_axis=(0, -1),
-                add_one=add_one,
-            )
-        elif param == "wei_logits":
-            rts = dynamics._get_rt_from_boundary(
-                self.wei_logits,
-                value,
-                return_mean=True,
-                output_flat=False,
-                mean_axis=(0, -1),
-                add_one=add_one,
-            )
+
         return rts
 
-    def loss(
-        self, value, param, use_boundary=None, loss_type="mle", penalize_zeros=True
-    ):
+    def loss(self, value, loss_type="mle", penalize_zeros=False):
         if penalize_zeros:
-            model_data_full = self._sweep(
-                value, param, use_boundary=use_boundary, add_one=False
-            )
+            model_data_full = self._sweep(value, add_one=False)
         else:
-            model_data_full = self._sweep(
-                value, param, use_boundary=use_boundary, add_one=True
-            )
+            model_data_full = self._sweep(value, add_one=True)
 
         n_zeros = len(self.human_rt) - np.count_nonzero(model_data_full)
         if loss_type == "mle":
@@ -211,8 +260,6 @@ class Model:
             human_responses = human_responses_trunc
 
         m_log_data = np.log(model_data)
-
-        _max = np.max(m_log_data)
 
         model_resc = (m_log_data - np.min(m_log_data)) / np.ptp(m_log_data)
         human_resc = (h_log_data - np.min(h_log_data)) / np.ptp(h_log_data)
