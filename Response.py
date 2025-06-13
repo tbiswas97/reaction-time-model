@@ -909,11 +909,6 @@ class Response:
         self.seg_flags = np.asarray([Model.sfs_t for Model in self.Models])
         self.logits = np.asarray([Model.logits for Model in self.Models])
 
-        diff = lambda x: (x[-1] - x[0]) / len(x)
-        self.logit_deriv = np.apply_along_axis(
-            diff, -1, sliding_window_view(self.logits, 3, axis=-1)
-        )
-
     def run_multilayer_model(
         self, n_layers=5, smooth=1, noisy_init=True, n_pseudocoords=4
     ):
