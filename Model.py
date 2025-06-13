@@ -17,7 +17,7 @@ from sklearn.model_selection import KFold
 
 
 class Model:
-    def __init__(self, ResponseObj_file, key="ai"):
+    def __init__(self, ResponseObj_file, key="ai_lambda"):
         """
         Collects only the output of segmentation probabilities per iteration of
         the Model. Image information is not included, but optimization functions
@@ -53,6 +53,13 @@ class Model:
             Response = ResponseObj_file
 
         self.key = key
+        if "ei" in self.key:
+            self.fit_dim = 2
+        elif self.key == "ai_both":
+            self.fit_dim = 2
+        else:
+            self.fit_dim = 1
+
         self.distances = np.asarray([Trial.distances for Trial in Response.Models])
 
         self.subject = Response.fileinfo["subject"]
@@ -60,9 +67,13 @@ class Model:
         self.k = Response.kSeg
 
         self.logits = Response.logits
-        self.logits_deriv = Response.logit_deriv
-        self.smooth_logits = Response.smooth_logits
         self.sfs_t = Response.seg_flags
+        if (self.key == "ai_both") or (self.key == "ai_lambda"):
+            self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
+            diff = lambda x: (x[-1] - x[0]) / len(x)
+            self.logit_deriv = np.apply_along_axis(
+                diff, -1, sliding_window_view(self.logits, 3, axis=-1)
+            )
         num_samples = self.logits.shape[-1]
         self.flat_logits = self.logits.reshape((-1, num_samples))
         self.noise_arr = np.random.normal(0, 1, size=self.flat_logits.shape)
@@ -71,34 +82,61 @@ class Model:
         self.human_responses = Response.Response.astype("bool")
         self.human_seg_flag = Response.human_seg_flag
 
-        logit_ig = iqr(self.logits.reshape(-1), rng=(1, 2))
-        ei_logit_ig = iqr(self.ei_logits.reshape(-1), rng=(1, 2))
-        ei_wt_drift_ig = iqr(self.wei_logits.reshape(-1), rng=(1, 2))
-        ei_wt_sp_ig = iqr(self.wei_logits.reshape(-1), rng=(1, 2))
-
-        self.hyperparams = {
-            "ai_lambda": {
-                "x0": np.array([0.01]),
-                "stepsize": 0.005,
-                "T": 100,
-                "niter_success": 100,
-            },
-            "ai_b": {"x0": logit_ig, "stepsize": 1, "T": 100, "niter_success": 100},
-            "ei": {
-                "x0": ei_logit_ig,
-                "stepsize": 1,
-                "T": 100,
-                "niter_success": 100,
-            },
-            "ei_wt_drift": {
-                "x0": ei_wt_drift_ig,
-                "stepsize": 1,
-                "T": 0.001,
-                "niter_success": 100,
-            },
-        }
-
-        self.rt_dict = {k: None for k in self.params_to_fit}
+        if "ai" in self.key:
+            ai_initial_guess = iqr(self.logits.reshape(-1), rng=(1, 2))
+            self.hyperparams = {
+                "ai_lambda": {
+                    "x0": np.array([0.01]),
+                    "stepsize": 0.005,
+                    "T": 100,
+                    "niter_success": 100,
+                },
+                "ai_b": {
+                    "x0": np.array([ai_initial_guess]),
+                    "stepsize": 1,
+                    "T": 100,
+                    "niter_success": 100,
+                },
+                "ai_both": {
+                    "x0": np.array([ai_initial_guess, 0.01]),
+                    "stepsize": 0.1,
+                    "T": 1,
+                    "niter_success": 100,
+                },
+            }
+        elif "ei" in self.key:
+            self.int_noisy_evidence(1, 5)
+            self.hyperparams = {
+                "ei": {
+                    "x0": np.array([ei_initial_guess, 1]),
+                    "stepsize": 1,
+                    "T": 100,
+                    "niter_success": 100,
+                },
+            }
+            if "wt" in self.key:
+                self.int_noisy_evidence(1, 10)
+                ei_initial_guess = iqr(self.evidence.reshape(-1), rng=(1, 2))
+                self.hyperparams = {
+                    "ei_wt_drift": {
+                        "x0": np.array([ei_initial_guess, 1]),
+                        "stepsize": 1,
+                        "T": 0.001,
+                        "niter_success": 100,
+                    },
+                    "ei_wt_sp": {
+                        "x0": np.array([ei_initial_guess, 1]),
+                        "stepsize": 1,
+                        "T": 0.001,
+                        "niter_success": 100,
+                    },
+                    "ei_wt_both": {
+                        "x0": np.array([ei_initial_guess, 1]),
+                        "stepsize": 1,
+                        "T": 0.001,
+                        "niter_success": 100,
+                    },
+                }
 
         self.opt_params = {}
         self.opt_error = {}
@@ -154,7 +192,6 @@ class Model:
             evidence = canvas.reshape(self.logits.shape)
 
         self.evidence = evidence
-
         # starting point weighted
 
         # drift weighted
@@ -164,7 +201,7 @@ class Model:
         self,
         values,
         conv_failure="argmax",
-        add_one=False,
+        add_one=True,
     ):
         """
         Parameters:
@@ -172,8 +209,6 @@ class Model:
         values : list
             Order is [$b$,$\lambda$]
         Returns:
-        ---------
-        rts : array of reaction times
         """
         if "ei" in self.key:
             self.int_noisy_evidence(self, values[1], 5)
@@ -189,24 +224,18 @@ class Model:
             self.evidence = self.logits
             rts = dynamics._get_rt_from_boundary(
                 self.evidence,
-                values[0],
+                values,
                 return_mean=True,
                 output_flat=False,
                 mean_axis=(0, -1),
                 add_one=add_one,
             )
         elif (self.key == "ai_lambda") or (self.key == "ai_both"):
-            self.evidence = self.logits
-            self.smooth_logits = sliding_window_view(self.logits, 3, axis=-1).mean(-1)
-            diff = lambda x: (x[-1] - x[0]) / len(x)
-            self.logit_deriv = np.apply_along_axis(
-                diff, -1, sliding_window_view(self.logits, 3, axis=-1)
-            )
             if self.key == "ai_lambda":
                 rts = dynamics._get_rt_from_deriv(
                     self.smooth_logits,
                     self.logit_deriv,
-                    values[1],
+                    values,
                     output_flat=False,
                     return_mean=True,
                     failure_mode=conv_failure,
@@ -229,11 +258,11 @@ class Model:
 
         return rts
 
-    def loss(self, value, loss_type="mle", penalize_zeros=False):
+    def loss(self, values, loss_type="mle", penalize_zeros=False):
         if penalize_zeros:
-            model_data_full = self._sweep(value, add_one=False)
+            model_data_full = self._sweep(values, add_one=False)
         else:
-            model_data_full = self._sweep(value, add_one=True)
+            model_data_full = self._sweep(values, add_one=True)
 
         n_zeros = len(self.human_rt) - np.count_nonzero(model_data_full)
         if loss_type == "mle":
@@ -305,27 +334,23 @@ class Model:
 
     def _fit_param(
         self,
-        param,
         loss_type="mle",
         annealing_step=True,
-        penalize_zeros=True,
+        penalize_zeros=False,
         verbose=False,
     ):
-        if param != "automult_2d":
-            loss_ = lambda x: self.loss(
-                x,
-                param=param,
-                loss_type=loss_type,
-                use_boundary=None,
-                penalize_zeros=penalize_zeros,
-            )
-        else:
-            pass
+
+        loss_ = lambda x: self.loss(
+            x,
+            loss_type=loss_type,
+            penalize_zeros=penalize_zeros,
+        )
+
         cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
 
         opt_res = basinhopping(
             loss_,
-            **self.hyperparams[param],
+            **self.hyperparams[self.key],
             minimizer_kwargs={"bounds": [(1e-4, 20)]},
             disp=verbose,
             callback=cbf,
@@ -337,7 +362,7 @@ class Model:
             else:
                 cbf_anneal = None
 
-            if param != "automult":
+            if self.key == "ai_b":
                 optt_res = dual_annealing(
                     loss_,
                     [
@@ -350,7 +375,7 @@ class Model:
                     callback=cbf_anneal,
                     maxiter=100,
                 )
-            else:
+            elif self.key == "ai_lambda":
                 optt_res = dual_annealing(
                     loss_,
                     [
@@ -367,56 +392,48 @@ class Model:
         else:
             res = opt_res
 
-        self.opt_error[param] = res.fun
-        self.opt_params[param] = res.x[0]
+        self.opt_error[self.key] = res.fun
+        self.opt_params[self.key] = res.x[0]
 
-        self.is_fit_1d = True
+    def fit_ai(self, verbose=True):
+        ig_2d = np.array([0.0, 0.0])
+
+        self.key = "ai_b"
+        self._fit_param(verbose=verbose)
+        ig_2d[0] = self.opt_params[self.key]
+
+        self.key = "ai_lambda"
+        self._fit_param(verbose=verbose)
+        ig_2d[1] = self.opt_params[self.key]
+
+        self.key = "ai_both"
+        self.hyperparams[self.key]["x0"] = ig_2d
+        self._fit_param_2d(verbose=True)
 
     def _fit_param_2d(
         self,
         loss_type="mle",
         annealing_step=True,
-        penalize_zeros=True,
+        penalize_zeros=False,
         verbose=False,
         n_optimizations=2,
     ):
-
         self.n_2d_opts = n_optimizations
 
-        assert self.is_fit_1d, "Must fit 1d params before 2d"
-
         loss_ = lambda x: self.loss(
-            x[0],
-            param="automult2d",
+            x,
             loss_type=loss_type,
-            use_boundary=x[1],
             penalize_zeros=penalize_zeros,
-        )
-
-        self.opt_params["automult_2d"] = np.array(
-            [self.opt_params["automult"], self.opt_params["logits"] * 3]
         )
 
         cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
 
-        hyperparams = {
-            "x0": self.opt_params["automult_2d"],
-            "stepsize": 0.1,
-            "T": 1,
-            "niter_success": 100,
-        }
-
         for i in range(n_optimizations):
-            hyperparams = {
-                "x0": self.opt_params["automult_2d"],
-                "stepsize": 0.1,
-                "T": 100,
-                "niter_success": 100,
-            }
-
+            if i > 0:
+                self.hyperparams[self.key]["x0"] = res.x
             opt_res = basinhopping(
                 loss_,
-                **hyperparams,
+                **self.hyperparams[self.key],
                 minimizer_kwargs={"bounds": [(1e-4, 1), (1e-4, 10)]},
                 disp=verbose,
                 callback=cbf,
@@ -444,12 +461,10 @@ class Model:
             else:
                 res = opt_res
 
-            self.opt_params["automult_2d"] = res.x
+            self.opt_params[self.key] = res.x
 
-        self.opt_params["automult_2d"] = res.x
-        self.opt_error["automult_2d"] = res.fun
-
-        self.is_fit_2d = True
+        self.opt_params[self.key] = res.x
+        self.opt_error[self.key] = res.fun
 
     def fit(
         self,
@@ -490,9 +505,6 @@ class Model:
             )
             savename = save_output + filename
             import_utils._pickle(self, savename)
-
-    def plot_loss_histograms(self):
-        pass
 
 
 class CrossValidator(Model):
