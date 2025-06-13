@@ -98,7 +98,7 @@ class Model:
                     "niter_success": 100,
                 },
                 "ai_both": {
-                    "x0": np.array([ai_initial_guess, 0.01]),
+                    "x0": np.array([50, 0.01]),
                     "stepsize": 0.1,
                     "T": 1,
                     "niter_success": 100,
@@ -106,6 +106,7 @@ class Model:
             }
         elif "ei" in self.key:
             self.int_noisy_evidence(1, 5)
+            ei_initial_guess = iqr(self.evidence.reshape(-1), rng=(1, 2))
             self.hyperparams = {
                 "ei": {
                     "x0": np.array([ei_initial_guess, 1]),
@@ -163,7 +164,7 @@ class Model:
             drift_rate_arr = flat_logits[:, -1] / num_samples
             # weighted drift
             if self.key == "ei_wt_drift":
-                temp = lam * drift_rate_arr + noise * self.arr
+                temp = lam * drift_rate_arr + noise * self.noise_arr
                 # Numerical integration step
                 temp = np.cumsum(temp, axis=1)
                 canvas[1:, :] = temp[:-1, :]
@@ -211,7 +212,7 @@ class Model:
         Returns:
         """
         if "ei" in self.key:
-            self.int_noisy_evidence(self, values[1], 5)
+            self.int_noisy_evidence(values[1], 5)
             rts = dynamics._get_rt_from_boundary(
                 self.evidence,
                 values[0],
@@ -428,13 +429,18 @@ class Model:
 
         cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
 
+        if self.key == "ai_both":
+            bound_dict = {"bounds": [(1e-4, 30), (1e-4, 1)]}
+        elif "ei" in self.key:
+            bound_dict = {"bounds": [(1e-4, 50), (0.01, 10)]}
+
         for i in range(n_optimizations):
             if i > 0:
                 self.hyperparams[self.key]["x0"] = res.x
             opt_res = basinhopping(
                 loss_,
                 **self.hyperparams[self.key],
-                minimizer_kwargs={"bounds": [(1e-4, 1), (1e-4, 10)]},
+                minimizer_kwargs=bound_dict,
                 disp=verbose,
                 callback=cbf,
             )
