@@ -16,6 +16,8 @@ from scipy.stats import iqr
 
 from sklearn.model_selection import KFold
 
+# TODO: deprecate penalize zeros
+
 
 class Model:
     def __init__(self, ResponseObj_file, key="ai_lambda"):
@@ -413,21 +415,6 @@ class Model:
         self.opt_error[self.key] = res.fun
         self.opt_params[self.key] = res.x[0]
 
-    def fit_ai(self, verbose=True):
-        ig_2d = np.array([0.0, 0.0])
-
-        self.key = "ai_b"
-        self._fit_param(verbose=verbose)
-        ig_2d[0] = self.opt_params[self.key]
-
-        self.key = "ai_lambda"
-        self._fit_param(verbose=verbose)
-        ig_2d[1] = self.opt_params[self.key]
-
-        self.key = "ai_both"
-        self.hyperparams[self.key]["x0"] = ig_2d
-        self._fit_param_2d(verbose=True)
-
     def _fit_param_2d(
         self,
         loss_type="mle",
@@ -489,13 +476,28 @@ class Model:
         self.opt_params[self.key] = res.x
         self.opt_error[self.key] = res.fun
 
+    def fit_ai(self, verbose=True):
+        ig_2d = np.array([0.0, 0.0])
+
+        self.key = "ai_b"
+        self._fit_param(verbose=verbose)
+        ig_2d[0] = self.opt_params[self.key]
+
+        self.key = "ai_lambda"
+        self._fit_param(verbose=verbose)
+        ig_2d[1] = self.opt_params[self.key]
+
+        self.key = "ai_both"
+        self.hyperparams[self.key]["x0"] = ig_2d
+        self._fit_param_2d(verbose=True)
+
     def fit(
         self,
         verbose="light",
         save_output=None,
         loss_type="mle",
         n_2d_opts=2,
-        penalize_zeros=True,
+        penalize_zeros=False,
     ):
 
         if verbose == "full":
@@ -503,24 +505,19 @@ class Model:
         else:
             vf = False
 
-        for param in self.params_to_fit[1:]:
-            if verbose == "light":
-                print("Fitting {}".format(param))
-                print(self.opt_params)
+        kwargs = {
+            "verbose": verbose,
+            "loss_type": loss_type,
+            "n_optimizations": n_2d_opts,
+        }
 
-            self._fit_param(
-                param, loss_type=loss_type, verbose=vf, penalize_zeros=penalize_zeros
-            )
+        if self.fit_dim == 2:
+            self._fit_param_2d(**kwargs)
+        elif self.fit_dim == 1:
+            self._fit_param(**kwargs)
 
         if verbose == "light":
-            print("Fitting automult_2d")
-
-        self._fit_param_2d(
-            verbose=vf,
-            loss_type=loss_type,
-            n_optimizations=n_2d_opts,
-            penalize_zeros=penalize_zeros,
-        )
+            print("Fitting {}".format(self.key))
 
         if save_output is not None:
             filename = "sub_{}_img_{}_k_{}_fit_model.pkl".format(
@@ -534,7 +531,7 @@ class Model:
         self.responses_struct = responses
         self.model_responses = np.mean(responses, axis=(0, -1))
 
-    def get_human_df(self):
+    def get_df(self):
         self._get_model_response()
         binarize = lambda x: True if x > 0.5 else False
         binarize = np.vectorize(binarize)
@@ -594,10 +591,9 @@ class Model:
 class CrossValidator(Model):
 
     def get_test_train_split(self, n_splits):
+        self.dfs = []
         self.n_splits = n_splits
-        self.attr_to_split = [
-            "logits",
-        ]
+        self.attr_to_split = ["logits", "logit_deriv", "smooth_logits", "distances"]
 
         self.attr_human = [
             "human_rt",
@@ -624,14 +620,6 @@ class CrossValidator(Model):
         splits = kf.split(idxs)
         self.test_idxs = np.asarray([split[1] for split in splits])
 
-    def set_opt_params(self, opt_params):
-        self.parent_opt_params = opt_params
-        for params in list(self.hyperparams.keys()):
-            self.hyperparams[params]["x0"] = np.array([self.parent_opt_params[params]])
-
-    def set_opt_error(self, opt_error):
-        self.parent_opt_error = opt_error
-
     def _train(self, fold):
         train_idxs = self.train_idxs[fold]
 
@@ -643,8 +631,8 @@ class CrossValidator(Model):
 
         self.fit()
 
-        self.fold_params[fold] = self.opt_params
-        self.fold_train_loss[fold] = self.opt_error
+        self.fold_params[fold] = self.opt_params[self.key]
+        self.fold_train_loss[fold] = [self.opt_error[self.key]]
 
     def _test(self, fold):
         test_idxs = self.test_idxs[fold]
@@ -655,19 +643,14 @@ class CrossValidator(Model):
         for attr in self.attr_human:
             self.__dict__[attr] = self.__dict__["parent_" + attr][test_idxs]
 
-        for param in self.params_to_fit:
-            if param != "automult_2d":
-                self.fold_test_loss[fold][param] = self.loss(
-                    self.fold_params[fold][param], param
-                )
-            else:
-                self.fold_test_loss[fold][param] = self.loss(
-                    self.fold_params[fold][param][0],
-                    param,
-                    use_boundary=self.fold_params[fold][param][1],
-                )
+        self.fold_test_loss[fold] = [self.loss(self.fold_params[fold])]
+
+        self.dfs.append(self.get_df())
 
     def cross_val_summary(self):
+
+        data = pd.concat(self.dfs, axis=0, ignore_index=True)
+        self.data = data
 
         test_loss = (
             pd.DataFrame.from_dict(self.fold_test_loss)
@@ -678,8 +661,8 @@ class CrossValidator(Model):
                 var_name="fold",
                 value_name="test_loss",
             )
-            .rename({"index": "model_type"}, axis=1)
-        ).set_index(["model_type", "fold"])
+            .rename({"index": "model_key"}, axis=1)
+        ).set_index(["model_key", "fold"])
 
         train_loss = (
             pd.DataFrame.from_dict(self.fold_train_loss)
@@ -690,10 +673,10 @@ class CrossValidator(Model):
                 var_name="fold",
                 value_name="train_loss",
             )
-            .rename({"index": "model_type"}, axis=1)
-        ).set_index(["model_type", "fold"])
+            .rename({"index": "model_key"}, axis=1)
+        ).set_index(["model_key", "fold"])
 
-        self.lkldf = test_loss.join(train_loss, ["model_type", "fold"])
+        self.lkldf = test_loss.join(train_loss, ["model_key", "fold"])
 
         self.lkldf = self.lkldf.reset_index()
 
@@ -705,6 +688,12 @@ class CrossValidator(Model):
             (self.n_pairs // self.n_splits) * (self.n_splits - 1)
         )
 
+        self.lkldf["model_key"] = self.key
+        for idx in range(self.n_splits):
+            self.lkldf.loc[idx, "lambda"] = self.fold_params[idx][1]
+            self.lkldf.loc[idx, "b"] = self.fold_params[idx][0]
+
+        """
         self.lkldf["param_bound"] = None
         self.lkldf["param_deriv"] = None
         for param in self.params_to_fit:
@@ -765,7 +754,6 @@ class CrossValidator(Model):
                     (self.lkldf.model_type == "automult_2d"), "parent_param_bound"
                 ] = self.parent_opt_params[param][1]
 
-        self.lkldf["subject"] = self.subject
-        self.lkldf["img"] = self.img
         self.lkldf["k"] = self.k
         return self.lkldf
+        """
