@@ -8,6 +8,7 @@ import import_utils
 import dynamics
 import toolbox as tb
 from numpy.lib.stride_tricks import sliding_window_view
+from matplotlib import pyplot as plt
 
 from scipy.optimize import basinhopping
 from scipy.optimize import dual_annealing
@@ -164,18 +165,20 @@ class Model:
             drift_rate_arr = flat_logits[:, -1] / num_samples
             # weighted drift
             if self.key == "ei_wt_drift":
-                temp = lam * drift_rate_arr + noise * self.noise_arr
+                temp = drift_rate_arr[..., np.newaxis] + noise * self.noise_arr
                 # Numerical integration step
                 temp = np.cumsum(temp, axis=1)
-                canvas[1:, :] = temp[:-1, :]
+                temp *= lam
+                canvas[:, 1:] = temp[:, :-1]
             # weighted prior and weighted drift
             elif self.key == "ei_wt_both":
-                temp = lam * drift_rate_arr + noise * self.arr
+                temp = drift_rate_arr[..., np.newaxis] + noise * self.noise_arr
                 temp = np.cumsum(temp, axis=1)
+                temp *= lam
                 canvas[1:, :] = temp[:-1, :]
-                canvas = canvas + drift_rate_arr
+                canvas = canvas + drift_rate_arr[..., np.newaxis]
             # standard ei
-            elif self.key == "ei":
+            elif (self.key == "ei") or (self.key == "ei_wt_sp"):
                 pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
                 neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
                 self.global_drift_rate = [pos_drift_rate, neg_drift_rate]
@@ -183,12 +186,14 @@ class Model:
                 decision_drift[flat_sfs_t[:, -1]] += pos_drift_rate
                 decision_drift[~flat_sfs_t[:, -1]] += neg_drift_rate
                 decision_drift = decision_drift[:, np.newaxis] / num_samples
-                temp = lam * decision_drift + noise * self.noise_arr
+                temp = decision_drift + noise * self.noise_arr
                 temp = np.cumsum(temp, axis=1)
-                canvas[1:, :] = temp[:-1, :]
+                temp = temp * lam
+                canvas[:, 1:] = temp[:, :-1]
                 # standard ei and weighted prior
                 if self.key == "ei_wt_sp":
-                    canvas = canvas + drift_rate_arr
+                    # canvas = canvas + drift_rate_arr
+                    canvas += drift_rate_arr[..., np.newaxis]
 
             evidence = canvas.reshape(self.logits.shape)
 
@@ -212,50 +217,56 @@ class Model:
         Returns:
         """
         if "ei" in self.key:
-            self.int_noisy_evidence(values[1], 5)
-            rts = dynamics._get_rt_from_boundary(
+            self.int_noisy_evidence(values[1], 10)
+            self.rts_struct = dynamics._get_rt_from_boundary(
                 self.evidence,
                 values[0],
-                return_mean=True,
+                return_mean=False,
                 output_flat=False,
                 mean_axis=(0, -1),
                 add_one=add_one,
             )
+
+            rts = self.rts_struct.mean(axis=(0, -1))
         elif self.key == "ai_b":
             self.evidence = self.logits
-            rts = dynamics._get_rt_from_boundary(
+            self.rts_struct = dynamics._get_rt_from_boundary(
                 self.evidence,
                 values,
-                return_mean=True,
+                return_mean=False,
                 output_flat=False,
                 mean_axis=(0, -1),
                 add_one=add_one,
             )
+
+            rts = self.rts_struct.mean(axis=(0, -1))
         elif (self.key == "ai_lambda") or (self.key == "ai_both"):
             if self.key == "ai_lambda":
-                rts = dynamics._get_rt_from_deriv(
+                self.rts_struct = dynamics._get_rt_from_deriv(
                     self.smooth_logits,
                     self.logit_deriv,
                     values,
                     output_flat=False,
-                    return_mean=True,
+                    return_mean=False,
                     failure_mode=conv_failure,
                     mean_axis=(0, -1),
                     use_boundary=None,
                     add_one=add_one,
                 )
+                rts = self.rts_struct.mean(axis=(0, -1))
             if self.key == "ai_both":
-                rts = dynamics._get_rt_from_deriv(
+                self.rts_struct = dynamics._get_rt_from_deriv(
                     self.smooth_logits,
                     self.logit_deriv,
                     values[1],
                     output_flat=False,
-                    return_mean=True,
+                    return_mean=False,
                     failure_mode=conv_failure,
                     mean_axis=(0, -1),
                     use_boundary=values[0],
                     add_one=add_one,
                 )
+                rts = self.rts_struct.mean(axis=(0, -1))
 
         return rts
 
@@ -276,9 +287,12 @@ class Model:
 
         z_hd = z_score(log_hd_full)
 
+        self.z_exc_idxs = z_hd < 1.282
+
         log_hd_trunc = log_hd_full[z_hd < 1.282]
         model_data_trunc = model_data_full[z_hd < 1.282]
         human_responses_trunc = self.human_responses[z_hd < 1.282]
+        self.td_hat = model_data_trunc
 
         if penalize_zeros:
             model_data = model_data_trunc[model_data_trunc != 0]
@@ -293,6 +307,9 @@ class Model:
 
         model_resc = (m_log_data - np.min(m_log_data)) / np.ptp(m_log_data)
         human_resc = (h_log_data - np.min(h_log_data)) / np.ptp(h_log_data)
+
+        self.log_td_hat = model_resc
+        self.log_td = human_resc
 
         model_split = {
             True: model_resc[human_responses],
@@ -432,7 +449,7 @@ class Model:
         if self.key == "ai_both":
             bound_dict = {"bounds": [(1e-4, 30), (1e-4, 1)]}
         elif "ei" in self.key:
-            bound_dict = {"bounds": [(1e-4, 50), (0.01, 10)]}
+            bound_dict = {"bounds": [(1e-4, 50), (1e-4, 10)]}
 
         for i in range(n_optimizations):
             if i > 0:
@@ -512,6 +529,67 @@ class Model:
             savename = save_output + filename
             import_utils._pickle(self, savename)
 
+    def _get_model_response(self):
+        responses = dynamics._get_responses_from_rt_arr(self.rts_struct, self.logits)
+        self.responses_struct = responses
+        self.model_responses = np.mean(responses, axis=(0, -1))
+
+    def get_human_df(self):
+        self._get_model_response()
+        binarize = lambda x: True if x > 0.5 else False
+        binarize = np.vectorize(binarize)
+        d = {
+            "model_rt": self.log_td_hat,
+            "human_rt": self.log_td,
+            "image_distance": self.distances[0, :, 0][self.z_exc_idxs],
+            "human_response": self.human_responses.astype("float")[self.z_exc_idxs],
+            "human_error": (
+                np.logical_xor(
+                    self.human_responses.astype("bool")[self.z_exc_idxs],
+                    self.human_seg_flag.astype("bool")[self.z_exc_idxs],
+                )
+            ).astype("float"),
+            "model_response": self.model_responses[self.z_exc_idxs],
+            "model_bool": binarize(self.model_responses[self.z_exc_idxs]),
+        }
+
+        df = pd.DataFrame.from_dict(d)
+
+        return df
+
+    def plot_loss(self):
+        fig, axs = plt.subplots(
+            nrows=1, ncols=1, sharey=False, sharex=False, figsize=(10, 10)
+        )
+        kwargs_model = {
+            "histtype": "step",
+            "linewidth": 6,
+            "alpha": 0.9,
+            "density": True,
+            "ec": "black",
+            "alpha": 0.7,
+        }
+
+        kwargs_human = {
+            "histtype": "step",
+            "linewidth": 6,
+            "ec": "red",
+            "density": True,
+            "alpha": 0.5,
+        }
+
+        axs.hist(self.log_td_hat, **kwargs_model, label="model")
+        axs.hist(self.log_td, **kwargs_human, label="human")
+        axs.legend(fontsize=20)
+        axs.grid(visible=True, axis="both", which="both")
+        axs.tick_params(labelsize=15)
+
+        for axis in ["top", "bottom", "left", "right"]:
+            axs.spines[axis].set_linewidth(3)
+
+        axs.set_ylabel("density", fontsize=20)
+        axs.set_xlabel("log(decision time) - rescaled", fontsize=20)
+
 
 class CrossValidator(Model):
 
@@ -519,11 +597,6 @@ class CrossValidator(Model):
         self.n_splits = n_splits
         self.attr_to_split = [
             "logits",
-            "logits_deriv",
-            "smooth_logits",
-            "ei_logits",
-            "wei_logits",
-            "sfs_t",
         ]
 
         self.attr_human = [
@@ -534,12 +607,9 @@ class CrossValidator(Model):
 
         self.fold_params = {k: None for k in range(n_splits)}
 
-        self.fold_train_loss = {
-            k: {param: None for param in self.params_to_fit} for k in range(n_splits)
-        }
-        self.fold_test_loss = {
-            k: {param: None for param in self.params_to_fit} for k in range(n_splits)
-        }
+        self.fold_train_loss = {k: None for k in range(n_splits)}
+
+        self.fold_test_loss = {k: None for k in range(n_splits)}
 
         for attr in self.attr_to_split + self.attr_human:
             self.__dict__["parent_" + attr] = self.__dict__[attr]
