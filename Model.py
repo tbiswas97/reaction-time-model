@@ -31,11 +31,11 @@ class Model:
         - Approx. inference model
             - fit with $b$ "ai_b"
             - fit with $\lambda$ "ai_lambda"
-            - fit with both "ai_both"
-        - Standard evidence integration model "ei"
-        - Weighted evidence integration models:
-            - Weighted starting point "ei_wt_drift"
-            - Weighted drift "ei_wt_sp"
+            - >>> fit with both "ai_both"
+        - >>> Standard evidence integration model "ei"
+        - >>> Weighted evidence integration models:
+            - >>> Weighted starting point "ei_wt_drift"
+            - >>> Weighted drift "ei_wt_sp"
 
         Parameters:
         ------------
@@ -79,7 +79,7 @@ class Model:
             )
         num_samples = self.logits.shape[-1]
         self.flat_logits = self.logits.reshape((-1, num_samples))
-        self.noise_arr = np.random.normal(0, 1, size=self.flat_logits.shape)
+        self.noise_struct = np.random.normal(0, 1, size=self.logits.shape)
 
         self.human_rt = Response.reactionTime
         self.human_responses = Response.Response.astype("bool")
@@ -158,6 +158,7 @@ class Model:
             The noise gain (multiplied to Wiener Process)
         """
         num_samples = self.logits.shape[-1]
+        self.noise_arr = self.noise_struct.reshape((-1, num_samples))
         flat_logits = self.logits.reshape((-1, num_samples))
         flat_sfs_t = self.sfs_t.reshape((-1, num_samples))
         canvas = np.zeros(flat_logits.shape)
@@ -505,15 +506,18 @@ class Model:
         else:
             vf = False
 
-        kwargs = {
-            "verbose": verbose,
-            "loss_type": loss_type,
-            "n_optimizations": n_2d_opts,
-        }
-
         if self.fit_dim == 2:
+            kwargs = {
+                "verbose": verbose,
+                "loss_type": loss_type,
+                "n_optimizations": n_2d_opts,
+            }
             self._fit_param_2d(**kwargs)
         elif self.fit_dim == 1:
+            kwargs = {
+                "verbose": verbose,
+                "loss_type": loss_type,
+            }
             self._fit_param(**kwargs)
 
         if verbose == "light":
@@ -527,7 +531,9 @@ class Model:
             import_utils._pickle(self, savename)
 
     def _get_model_response(self):
-        responses = dynamics._get_responses_from_rt_arr(self.rts_struct, self.logits)
+        responses = dynamics._get_responses_from_rt_arr(
+            self.rts_struct - 1, self.logits
+        )
         self.responses_struct = responses
         self.model_responses = np.mean(responses, axis=(0, -1))
 
@@ -593,7 +599,12 @@ class CrossValidator(Model):
     def get_test_train_split(self, n_splits):
         self.dfs = []
         self.n_splits = n_splits
-        self.attr_to_split = ["logits", "logit_deriv", "smooth_logits", "distances"]
+        if (self.key == "ai_lambda") or (self.key == "ai_both"):
+            self.attr_to_split = ["logits", "logit_deriv", "smooth_logits", "distances"]
+        elif "ei" in self.key:
+            self.attr_to_split = ["logits", "sfs_t", "distances", "noise_struct"]
+        else:
+            self.attr_to_split = ["logits", "sfs_t", "distances"]
 
         self.attr_human = [
             "human_rt",
