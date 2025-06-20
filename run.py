@@ -743,9 +743,6 @@ if __name__ == "__main__":
         fit_model = import_utils._load(mf)
         cv = Model.CrossValidator(rf)
 
-        cv.set_opt_error(fit_model.opt_error)
-        cv.set_opt_params(fit_model.opt_params)
-
         n_splits = 5
         cv.get_test_train_split(n_splits)
 
