@@ -276,7 +276,6 @@ class Response:
             default is True, does not work for False yet
         """
         os.chdir(self.homedir)
-        print(self.homedir)
         if not preloaded:
             self.seg_map, self.inferred_proba_maps, self.seg_proba_maps, self.loss = (
                 self._fit()
