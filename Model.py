@@ -661,7 +661,11 @@ class CrossValidator(Model):
     def cross_val_summary(self):
 
         data = pd.concat(self.dfs, axis=0, ignore_index=True)
+
         self.data = data
+        self.data["subject"] = self.subject
+        self.data["img"] = self.img
+        self.data["k"] = self.k
 
         test_loss = (
             pd.DataFrame.from_dict(self.fold_test_loss)
@@ -703,6 +707,10 @@ class CrossValidator(Model):
         for idx in range(self.n_splits):
             self.lkldf.loc[idx, "lambda"] = self.fold_params[idx][1]
             self.lkldf.loc[idx, "b"] = self.fold_params[idx][0]
+
+        self.lkldf["subject"] = self.subject
+        self.lkldf["img"] = self.img
+        self.lkldf["k"] = self.k
 
         """
         self.lkldf["param_bound"] = None
