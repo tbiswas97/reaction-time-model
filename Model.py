@@ -64,10 +64,10 @@ class Model:
             self.fit_dim = 1
 
         self.distances = np.asarray([Trial.distances for Trial in Response.Models])
-
         self.subject = Response.fileinfo["subject"]
         self.img = Response.fileinfo["img"]
         self.k = Response.kSeg
+        self.best_layer = Response.best_layer
 
         self.logits = Response.logits
         self.sfs_t = Response.seg_flags
@@ -663,9 +663,11 @@ class CrossValidator(Model):
         data = pd.concat(self.dfs, axis=0, ignore_index=True)
 
         self.data = data
+        self.data["model_key"] = self.key
         self.data["subject"] = self.subject
         self.data["img"] = self.img
         self.data["k"] = self.k
+        self.data["best_layer"] = self.best_layer
 
         test_loss = (
             pd.DataFrame.from_dict(self.fold_test_loss)
@@ -711,6 +713,7 @@ class CrossValidator(Model):
         self.lkldf["subject"] = self.subject
         self.lkldf["img"] = self.img
         self.lkldf["k"] = self.k
+        self.lkldf["best_layer"] = self.best_layer
 
         """
         self.lkldf["param_bound"] = None

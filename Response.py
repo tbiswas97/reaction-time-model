@@ -60,6 +60,7 @@ class Response:
         d = self.loadmat_(file)
         self.__dict__ = d["data"]
         self.filename = file
+        self.filekey = self.filename.split("/")[-1].split(".")[0]
         self.homedir = homedir
         self.parse_filename()
         self.fields = list(d["data"].keys())
@@ -347,6 +348,19 @@ class Response:
         psame = np.dot(vec_a, vec_b)
 
         return psame
+
+    def _get_best_layer(self):
+
+        os.chdir(self.homedir)
+        assert os.path.exists(
+            os.path.join(self.homedir, "data", "best_layer.csv")
+        ), "No best_layer.csv added to data folder"
+        df = pd.read_csv(
+            os.path.join(self.homedir, "data", "best_layer.csv"), index_col=0
+        )
+        best_layer = df.loc[(self.filekey == df.key), "best_layer"].values[0]
+
+        return best_layer
 
     def sample_pmap(self, resize=True):
         """
@@ -816,7 +830,7 @@ class Response:
         smooth=1,
         noisy_init=True,
         n_pseudocoords=4,
-        layer=1,
+        layer=0,
         random_init=False,
         n_pca=6,
     ):
@@ -842,6 +856,11 @@ class Response:
             Default is 6
 
         """
+        if layer == 0:
+            self.best_layer = self._get_best_layer()
+        else:
+            self.best_layer = layer
+
         self.fit()
 
         self.Models = []
@@ -869,7 +888,7 @@ class Response:
             Model.fit_model(
                 model="c",
                 n_components=np.array([self.kSeg]),
-                layer_stop=layer,
+                layer_stop=16,
                 keep=True,
                 init=human_prior,
                 init_eps=init_eps,
@@ -877,7 +896,7 @@ class Response:
                 n_pca=n_pca,
             )
 
-            Model.parse_layer(layer)
+            Model.parse_layer(self.best_layer)
 
             self.get_np_coords()
             points = self.points
