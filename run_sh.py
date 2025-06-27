@@ -1,7 +1,7 @@
 import sys
-
-sys.path.append("../sun/src")
 import os
+
+sys.path.append("/gs/gsfs0/users/tbiswas/bayes_seg/src")
 import import_utils
 
 pname = sys.argv[0]
