@@ -22,7 +22,6 @@ from scipy.io import loadmat
 import re
 from glob import glob as glob
 from natsort import natsorted as ns
-from vseg.src.vseg import SegmentationMap as VSM
 from numpy.lib.stride_tricks import sliding_window_view
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
