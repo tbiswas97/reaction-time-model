@@ -51,7 +51,7 @@ R.run_dynamics_model(
     n_pseudocoords=10,
     n_pca=6,
 )
-import_utils._pickle(R, os.path.join(homedir, "out_hp_adjust", f"{filekey}_Segmentation.pkl"))
+import_utils._pickle(R, os.path.join(homedir, "out_hp_adjust_2", f"{filekey}_Segmentation.pkl"))
 
 import Model as M
 
@@ -71,7 +71,7 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
     cv.lkldf["smooth_key"] = smooth_key
     cv.lkldf["init_key"] = init_key
 
-    output_dir = os.path.join(homedir, "out_hp_adjust")
+    output_dir = os.path.join(homedir, "out_hp_adjust_2")
 
     cv.lkldf.to_csv(
         os.path.join(
