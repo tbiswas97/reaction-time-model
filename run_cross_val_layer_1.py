@@ -48,10 +48,10 @@ R.run_dynamics_model(
     layer=1,
     smooth=smoothing,
     random_init=random_init,
-    n_pseudocoords=20,
+    n_pseudocoords=10,
     n_pca=6,
 )
-import_utils._pickle(R, os.path.join(homedir, "out_1", f"{filekey}_layer_1_Segmentation.pkl"))
+import_utils._pickle(R, os.path.join(homedir, "out_hpa_1", f"{filekey}_layer_1_Segmentation.pkl"))
 
 import Model as M
 
@@ -71,7 +71,7 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
     cv.lkldf["smooth_key"] = smooth_key
     cv.lkldf["init_key"] = init_key
 
-    output_dir = os.path.join(homedir, "out_1")
+    output_dir = os.path.join(homedir, "out_hpa_1")
 
     cv.lkldf.to_csv(
         os.path.join(
@@ -83,19 +83,3 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
             output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_layer_1_test_data.csv"
         )
     )
-
-    mod = M.Model(R,key=key)
-    mod.fit()
-
-    df = mod.get_df()
-
-    df["model_key"] = key
-    df["loss"] = mod.opt_error[key]
-    df["sub"] = mod.subject
-    df["img"] = mod.img
-    df["k"] = mod.k
-    df["layer"] = mod.best_layer
-
-    output_dir = os.path.join(homedir,"out_1")
-    df.to_csv(os.path.join(output_dir, f"{filekey}_{key}_1_0_full_fit.csv"))
-    

@@ -2,9 +2,9 @@
 #SBATCH --partition=normal
 #SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=64G
-#SBATCH --job-name seg_noisy
-#SBATCH --output  /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.out
-#SBATCH --error   /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.err
+#SBATCH --job-name seg_hpa_1
+#SBATCH --output  /gs/gsfs0/users/tbiswas/bayes_seg/logs_1/job.%J.out
+#SBATCH --error   /gs/gsfs0/users/tbiswas/bayes_seg/logs_1/job.%J.err
 #SBATCH --array=1-47
 
 
