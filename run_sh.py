@@ -21,24 +21,6 @@ else:
 
 from Response import Response as Res
 
-"""
-a = "data/data_processing/sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl"
-
-In [5]: a.split("/")
-Out[5]:
-['data',
-'data_processing',
-'sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl']
-
-In [6]: a.split("/")[-1]
-Out[6]: 'sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl'
-
-In [7]: a.split("/")[-1].split(".")
-Out[7]: ['sub_12508_exp1_session1_cat2_img3', 'mat_Segmentation', 'pkl']
-
-In [8]: a.split("/")[-1].split(".")[0]
-Out[8]: 'sub_12508_exp1_session1_cat2_img3'
-"""
 filekey = response_file.split("/")[-1].split(".")[0]
 
 R = Res(homedir, response_file)
