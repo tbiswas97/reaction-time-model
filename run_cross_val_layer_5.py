@@ -48,7 +48,7 @@ R.run_dynamics_model(
     layer=5,
     smooth=smoothing,
     random_init=random_init,
-    n_pseudocoords=20,
+    n_pseudocoords=10,
     n_pca=6,
 )
 import_utils._pickle(R, os.path.join(homedir, "out_5", f"{filekey}_layer_5_Segmentation.pkl"))
@@ -83,19 +83,3 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
             output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_layer_5_test_data.csv"
         )
     )
-
-    mod = M.Model(R,key=key)
-    mod.fit()
-
-    df = mod.get_df()
-
-    df["model_key"] = key
-    df["loss"] = mod.opt_error[key]
-    df["sub"] = mod.subject
-    df["img"] = mod.img
-    df["k"] = mod.k
-    df["layer"] = mod.best_layer
-
-    output_dir = os.path.join(homedir,"out_5")
-    df.to_csv(os.path.join(output_dir, f"{filekey}_{key}_1_0_full_fit.csv"))
-    
