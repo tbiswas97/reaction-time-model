@@ -435,7 +435,7 @@ class Model:
         cbf = lambda x, f, accept: True if (f < (1e-3)) and (accept) else False
 
         if self.key == "ai_both":
-            bound_dict = {"bounds": [(1e-4, 20), (1e-4, 1)]}
+            bound_dict = {"bounds": [(1e-4, 10), (1e-4, 1)]}
         elif "ei" in self.key:
             bound_dict = {"bounds": [(1e-4, 50), (1e-4, 10)]}
 
