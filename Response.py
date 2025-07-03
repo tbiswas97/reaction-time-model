@@ -348,14 +348,14 @@ class Response:
 
         return psame
 
-    def _get_best_layer(self):
+    def _get_best_layer(self,lut_name="best_layer.csv"):
 
         os.chdir(self.homedir)
         assert os.path.exists(
-            os.path.join(self.homedir, "data", "best_layer.csv")
+            os.path.join(self.homedir, "data", lut_name)
         ), "No best_layer.csv added to data folder"
         df = pd.read_csv(
-            os.path.join(self.homedir, "data", "best_layer.csv"), index_col=0
+            os.path.join(self.homedir, "data", lut_name), index_col=0
         )
         best_layer = df.loc[(self.filekey == df.key), "best_layer"].values[0]
 
@@ -832,6 +832,7 @@ class Response:
         layer=0,
         random_init=False,
         n_pca=6,
+        lut_name="best_layer_csv",
     ):
         """
         Parameters:
@@ -847,16 +848,18 @@ class Response:
         n_pseudocoords : int
             The number of pseudocoords around each grid, the number of points being
             averaged is n^2 given n pseudocoords
-        layer = int
+        layer : int
             The layer to use in FlexMM
-        random_init = False
+        random_init : bool
             False if standard initialization, True if ablating
-        n_pca = int
+        n_pca : int
             Default is 6
+        lut_name : str
+            filename located in ./data/ to use for best_layer lookup table
 
         """
         if layer == 0:
-            self.best_layer = self._get_best_layer()
+            self.best_layer = self._get_best_layer(lut_name)
         else:
             self.best_layer = layer
 
