@@ -29,6 +29,6 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
     df["k"] = M.k
     df["layer"] = M.best_layer
 
-    output_dir = os.path.join(homedir,"out")
+    output_dir = os.path.join(homedir,"out_bl5_hpa")
     df.to_csv(os.path.join(output_dir, f"{filekey}_{key}_1_0_full_fit.csv"))
     
