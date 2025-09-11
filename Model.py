@@ -117,6 +117,12 @@ class Model:
                     "T": 100,
                     "niter_success": 100,
                 },
+                "ei_base": {
+                    "x0": np.array([ei_initial_guess, 1]),
+                    "stepsize": 1,
+                    "T": 100,
+                    "niter_success": 100,
+                },
             }
             if "wt" in self.key:
                 self.int_noisy_evidence(1, 10)
@@ -181,9 +187,13 @@ class Model:
                 canvas[1:, :] = temp[:-1, :]
                 canvas = canvas + drift_rate_arr[..., np.newaxis]
             # standard ei
-            elif (self.key == "ei") or (self.key == "ei_wt_sp"):
-                pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
-                neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
+            elif (self.key == "ei") or (self.key == "ei_wt_sp") or (self.key=="ei_base"):
+                if self.key=="ei":
+                    pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
+                    neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
+                elif self.key=="ei_base":
+                    pos_drift_rate = 1
+                    neg_drift_rate = -1
                 self.global_drift_rate = [pos_drift_rate, neg_drift_rate]
                 decision_drift = np.zeros(flat_logits[:, -1].shape)
                 decision_drift[flat_sfs_t[:, -1]] += pos_drift_rate
