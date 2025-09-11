@@ -7,13 +7,14 @@ import import_utils
 pname = sys.argv[0]
 homedir = str(sys.argv[1])
 response_file = str(sys.argv[2])
-smoothing = int(sys.argv[3])
+lut_name = str(sys.argv[3])
+smoothing = int(sys.argv[4])
 if smoothing == 1:
     smooth_key = "smooth"
 else:
     smooth_key = "unsmooth"
 
-random_init = int(sys.argv[4])
+random_init = int(sys.argv[5])
 if random_init == 1:
     init_key = "random"
 else:
@@ -32,6 +33,7 @@ R.run_dynamics_model(
     random_init=random_init,
     n_pseudocoords=10,
     n_pca=6,
+    lut_name=lut_name,
 )
 import_utils._pickle(R, os.path.join(homedir, "out", f"{filekey}_Segmentation.pkl"))
 

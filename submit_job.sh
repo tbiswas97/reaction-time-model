@@ -2,7 +2,7 @@
 #SBATCH --partition=normal
 #SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=16G
-#SBATCH --job-name seg_5
+#SBATCH --job-name bl5_rand
 #SBATCH --output  /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.out
 #SBATCH --error   /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.err
 #SBATCH --array=1-47

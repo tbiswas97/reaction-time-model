@@ -7,13 +7,14 @@ import import_utils
 pname = sys.argv[0]
 homedir = str(sys.argv[1])
 response_file = str(sys.argv[2])
-smoothing = int(sys.argv[3])
+lut_name = str(sys.argv[3])
+smoothing = int(sys.argv[4])
 if smoothing == 1:
     smooth_key = "smooth"
 else:
     smooth_key = "unsmooth"
 
-random_init = int(sys.argv[4])
+random_init = int(sys.argv[5])
 if random_init == 1:
     init_key = "random"
 else:
@@ -21,37 +22,20 @@ else:
 
 from Response import Response as Res
 
-"""
-a = "data/data_processing/sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl"
-
-In [5]: a.split("/")
-Out[5]:
-['data',
-'data_processing',
-'sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl']
-
-In [6]: a.split("/")[-1]
-Out[6]: 'sub_12508_exp1_session1_cat2_img3.mat_Segmentation.pkl'
-
-In [7]: a.split("/")[-1].split(".")
-Out[7]: ['sub_12508_exp1_session1_cat2_img3', 'mat_Segmentation', 'pkl']
-
-In [8]: a.split("/")[-1].split(".")[0]
-Out[8]: 'sub_12508_exp1_session1_cat2_img3'
-"""
 filekey = response_file.split("/")[-1].split(".")[0]
 
 R = Res(homedir, response_file)
 R.fit()
 R.run_dynamics_model(
     n_trials=1,
-    layer=1,
+    layer=0,
     smooth=smoothing,
     random_init=random_init,
     n_pseudocoords=10,
     n_pca=6,
+    lut_name=lut_name,
 )
-import_utils._pickle(R, os.path.join(homedir, "out_hpa_1_2", f"{filekey}_layer_1_Segmentation.pkl"))
+import_utils._pickle(R, os.path.join(homedir, "out_bl13", f"{filekey}_Segmentation.pkl"))
 
 import Model as M
 
@@ -71,15 +55,15 @@ for key in ["ai_both", "ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
     cv.lkldf["smooth_key"] = smooth_key
     cv.lkldf["init_key"] = init_key
 
-    output_dir = os.path.join(homedir, "out_hpa_1_2")
+    output_dir = os.path.join(homedir, "out_bl13")
 
     cv.lkldf.to_csv(
         os.path.join(
-            output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_layer_1_fit_params.csv"
+            output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_fit_params.csv"
         )
     )
     cv.data.to_csv(
         os.path.join(
-            output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_layer_1_test_data.csv"
+            output_dir, f"{filekey}_{key}_{smooth_key}_{init_key}_test_data.csv"
         )
     )
