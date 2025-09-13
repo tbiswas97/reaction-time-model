@@ -25,7 +25,7 @@ from natsort import natsorted as ns
 from numpy.lib.stride_tricks import sliding_window_view
 
 PATTERN = "^(?P<home>.*)\/sub_(?P<subject>\d*)_exp(?P<experiment>\d)_session(?P<session>\d)_cat(?P<cat>\d)_img(?P<img>\d).(?P<ext>.*)"
-FITS_DIR = "/Users/tb/Documents/lab/projects/em_iteration_analysis"
+FITS_DIR = "data/fits/"
 
 
 class Response:
@@ -282,7 +282,7 @@ class Response:
             )
 
         else:
-            home = "data/fits/"
+            home = FITS_DIR
             filename = "fits_sub_{}_exp{}_session{}_cat{}_img{}.mat".format(
                 self.fileinfo["subject"],
                 self.fileinfo["experiment"],
