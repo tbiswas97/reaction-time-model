@@ -188,12 +188,12 @@ class Model:
                 canvas = canvas + drift_rate_arr[..., np.newaxis]
             # standard ei
             elif (self.key == "ei") or (self.key == "ei_wt_sp") or (self.key=="ei_base"):
-                if self.key=="ei":
-                    pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
-                    neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
-                elif self.key=="ei_base":
+                if self.key=="ei_base":
                     pos_drift_rate = 1
                     neg_drift_rate = -1
+                if (self.key=="ei") or (self.key=="ei_wt_sp"):
+                    pos_drift_rate = np.mean(flat_logits[:, -1][flat_sfs_t[:, -1]])
+                    neg_drift_rate = np.mean(flat_logits[:, -1][~flat_sfs_t[:, -1]])
                 self.global_drift_rate = [pos_drift_rate, neg_drift_rate]
                 decision_drift = np.zeros(flat_logits[:, -1].shape)
                 decision_drift[flat_sfs_t[:, -1]] += pos_drift_rate
