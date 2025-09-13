@@ -283,7 +283,7 @@ class Response:
 
         else:
             home = FITS_DIR
-            filename = "fits_sub_{}_exp{}_session{}_cat{}_img{}.mat".format(
+            filename = "fitsFixlam_sub_{}_exp{}_session{}_cat{}_img{}.mat".format(
                 self.fileinfo["subject"],
                 self.fileinfo["experiment"],
                 self.fileinfo["session"],
