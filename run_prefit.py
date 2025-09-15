@@ -7,39 +7,19 @@ import import_utils
 pname = sys.argv[0]
 homedir = str(sys.argv[1])
 response_file = str(sys.argv[2])
-lut_name = str(sys.argv[3])
-smoothing = int(sys.argv[4])
-if smoothing == 1:
-    smooth_key = "smooth"
-else:
-    smooth_key = "unsmooth"
 
-random_init = int(sys.argv[5])
-if random_init == 1:
-    init_key = "random"
-else:
-    init_key = "hmap"
+print(f"Import {response_file}")
+R = import_utils._load(response_file)
 
-from Response import Response as Res
+filekey = R.filekey
 
-filekey = response_file.split("/")[-1].split(".")[0]
+smooth_key = "smooth"
 
-R = Res(homedir, response_file)
-R.fit()
-R.run_dynamics_model(
-    n_trials=1,
-    layer=0,
-    smooth=smoothing,
-    random_init=random_init,
-    n_pseudocoords=10,
-    n_pca=6,
-    lut_name=lut_name,
-)
-import_utils._pickle(R, os.path.join(homedir, "out_bl5_hpa", f"{filekey}_{smooth_key}_{init_key}_Segmentation.pkl"))
+init_key = "hmap"
 
 import Model as M
 
-for key in ["ai_both","ei_base","ei", "ei_wt_drift", "ei_wt_sp", "ei_wt_both"]:
+for key in ["ei_wt_sp", "ei_wt_both"]:
     cv = M.CrossValidator(R, key=key)
 
     n_folds = 5
