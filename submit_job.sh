@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --partition=normal
 #SBATCH --time=48:00:00
-#SBATCH --mem-per-cpu=8G
-#SBATCH --job-name pmaps
+#SBATCH --mem-per-cpu=64G
+#SBATCH --job-name mtff
 #SBATCH --output  /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.out
 #SBATCH --error   /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.err
-#SBATCH --array=1-79
+#SBATCH --array=1-158
 
 
 # start from launch dir
@@ -16,6 +16,6 @@ conda init
 conda activate seg
 
 # run jobs 
-CMDFILE=commands_get_pmap.txt
+CMDFILE=commands_multitrials_full.txt
 CMD=$(awk "NR==$SLURM_ARRAY_TASK_ID" $CMDFILE)
 $CMD

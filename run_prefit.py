@@ -19,7 +19,7 @@ init_key = "hmap"
 
 import Model as M
 
-for key in ["ei_wt_sp", "ei_wt_both"]:
+for key in ["ai_b", "ai_lambda"]:
     cv = M.CrossValidator(R, key=key)
 
     n_folds = 5
@@ -35,7 +35,7 @@ for key in ["ei_wt_sp", "ei_wt_both"]:
     cv.lkldf["smooth_key"] = smooth_key
     cv.lkldf["init_key"] = init_key
 
-    output_dir = os.path.join(homedir, "out_bl5_hpa")
+    output_dir = os.path.join(homedir, "out_bl5_hpa_smooth_fits_singlerules")
 
     cv.lkldf.to_csv(
         os.path.join(
