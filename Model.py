@@ -717,8 +717,16 @@ class CrossValidator(Model):
 
         self.lkldf["model_key"] = self.key
         for idx in range(self.n_splits):
-            self.lkldf.loc[idx, "lambda"] = self.fold_params[idx][1]
-            self.lkldf.loc[idx, "b"] = self.fold_params[idx][0]
+            if (self.key != "ai_b") and (self.key != "ai_lambda"):
+                self.lkldf.loc[idx, "lambda"] = self.fold_params[idx][1]
+                self.lkldf.loc[idx, "b"] = self.fold_params[idx][0]
+            else:
+                if self.key == "ai_b":
+                    self.lkldf.loc[idx, "b"] = self.fold_params[idx]
+                elif self.key == "ai_lambda":
+                    self.lkldf.loc[idx, "lambda"] = self.fold_params[idx]
+
+
 
         self.lkldf["subject"] = self.subject
         self.lkldf["img"] = self.img
