@@ -4,6 +4,8 @@
 *.csv
 *.pkl
 run*
+/figs
+commands*
 __pycache__/
 .DS_Store
 data/
