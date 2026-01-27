@@ -3,6 +3,7 @@
 *.ipynb
 *.csv
 *.pkl
+run*
 __pycache__/
 .DS_Store
 data/
