@@ -2,10 +2,10 @@
 #SBATCH --partition=normal
 #SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=64G
-#SBATCH --job-name mtff
+#SBATCH --job-name k4_us
 #SBATCH --output  /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.out
 #SBATCH --error   /gs/gsfs0/users/tbiswas/bayes_seg/logs/job.%J.err
-#SBATCH --array=1-158
+#SBATCH --array=1-58
 
 
 # start from launch dir
@@ -16,6 +16,6 @@ conda init
 conda activate seg
 
 # run jobs 
-CMDFILE=commands_multitrials_full.txt
+CMDFILE=commands_smooth_fits_nni_unsmooth.txt
 CMD=$(awk "NR==$SLURM_ARRAY_TASK_ID" $CMDFILE)
 $CMD
