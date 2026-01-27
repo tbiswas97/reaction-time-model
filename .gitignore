@@ -5,7 +5,7 @@
 *.pkl
 run*
 /figs
-commands*
+*commands*
 __pycache__/
 .DS_Store
 data/
