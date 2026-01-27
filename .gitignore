@@ -9,4 +9,8 @@ run*
 __pycache__/
 .DS_Store
 data/
+all_layers_comp.py
+for_manuscript.py
+get_histcomp.py
+
 
