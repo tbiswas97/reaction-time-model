@@ -31,11 +31,11 @@ class Model:
         - Approx. inference model
             - fit with $b$ "ai_b"
             - fit with $\lambda$ "ai_lambda"
-            - >>> fit with both "ai_both"
+            - >>> fit both with "ai_both"
         - >>> Standard evidence integration model "ei"
         - >>> Weighted evidence integration models:
-            - >>> Weighted starting point "ei_wt_drift"
-            - >>> Weighted drift "ei_wt_sp"
+            - >>> Weighted starting point "ei_wt_sp"
+            - >>> Weighted drift "ei_wt_drift"
 
         Parameters:
         ------------
