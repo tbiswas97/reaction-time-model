@@ -832,6 +832,11 @@ class Response:
         layer=0,
         random_init=False,
         n_pca=6,
+<<<<<<< HEAD
+=======
+        lut_name="best_layer_csv",
+        override_k = None
+>>>>>>> ee3d085ddda67567dde81b86d06d1b274d677d42
     ):
         """
         Parameters:
@@ -884,9 +889,14 @@ class Response:
 
                 init_eps = 0.5 * (1 / (self.kSeg - 1)) - 1e-4
 
+            if override_k is not None:
+                self.kSeg = override_k
+                
+            k = np.array([self.kSeg])
+
             Model.fit_model(
                 model="c",
-                n_components=np.array([self.kSeg]),
+                n_components=k,
                 layer_stop=16,
                 keep=True,
                 init=human_prior,
