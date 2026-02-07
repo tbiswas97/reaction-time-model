@@ -832,11 +832,8 @@ class Response:
         layer=0,
         random_init=False,
         n_pca=6,
-<<<<<<< HEAD
-=======
         lut_name="best_layer_csv",
         override_k = None
->>>>>>> ee3d085ddda67567dde81b86d06d1b274d677d42
     ):
         """
         Parameters:
