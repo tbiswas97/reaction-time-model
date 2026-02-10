@@ -4,12 +4,15 @@ import Response
 from scipy.special import gamma
 from scipy.stats import entropy
 import toolbox as tb
+import pandas as pd
+
 class Posterior:
     def __init__(self, ResponseObj, n_r=500):
         """
         Saves Student-T parameters from FlexMM
         """
         R = ResponseObj
+        self.R = R
         self.points = R.points
         self.Model = R.Models[0]
         self.T = self.Model.means_t.shape[0]
@@ -164,6 +167,8 @@ class Posterior:
 
     def get_pointwise_df(self):
         d = {}
+        R = self.R
+
         d["k"] = [R.kSeg]*len(R.points)*self.T
         d["img"] = [R.fileinfo['img']]*len(R.points)*self.T
         d["sub"] = [R.fileinfo["subject"]]*len(R.points)*self.T
@@ -173,12 +178,19 @@ class Posterior:
         d["mu_MAP"] =  np.concatenate([self.analytical_mean(i,mix=False,_map=True) for i in range(len(R.points))])
         d["var_mixed"] = np.concatenate([self.analytical_var(i,mix=True,_map=False) for i in range(len(R.points))])
         d["var_MAP"] =  np.concatenate([self.analytical_var(i,mix=False,_map=True) for i in range(len(R.points))])
-
+        
         entropies = entropy(R.fit_pmap)
         entropy_flat = entropies.T.ravel()
 
         d["entropy_flat"] = entropy_flat.repeat(self.T)
 
         df = pd.DataFrame.from_dict(d)
+
+        if "random" in R.filename:
+            df["key"] = "random"
+        elif "unsmooth" in R.filename:
+            df["key"] = "unsmooth"
+        else:
+            df["key"] = "hmap"
 
         return df
