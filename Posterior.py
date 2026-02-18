@@ -61,7 +61,7 @@ class Posterior:
             gamma((self.dofs_t / 2) + 1) / gamma((self.dofs_t / 2) + 1 / 2)
         ) ** 2
 
-        out = first_term * (gamma_term1 - (gamma_term2) ** 2)
+        out = first_term * (gamma_term1 - (gamma_term2))
 
         if mix:
             means = self.analytical_mean(
