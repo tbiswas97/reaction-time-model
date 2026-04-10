@@ -23,6 +23,12 @@ class Posterior:
 
         self.n_r = n_r
         self.r = np.linspace(0, 10, self.n_r)
+        self.sc = 1
+
+    def set_spike_count_multiplier(self,c):
+        self.sc = c
+
+
 
     def analytical_mean(self, point_idx, freeze_params=False, mix=True, _map=False):
         coord = self.points[point_idx]
@@ -45,7 +51,7 @@ class Posterior:
                 pis = self.Model.weights_t[:, coord[0], coord[1], :]
                 out = np.diag(out[:,pis.argmax(1)])
 
-        return out
+        return out*self.sc
 
     def analytical_var(self, point_idx, freeze_params=False, mix=True, _map=False):
         coord = self.points[point_idx]
@@ -61,23 +67,25 @@ class Posterior:
             gamma((self.dofs_t / 2) + 1) / gamma((self.dofs_t / 2) + 1 / 2)
         ) ** 2
 
-        out = first_term * (gamma_term1 - (gamma_term2))
+        out = first_term * (gamma_term1 - (gamma_term2))*(self.sc**2)
 
         if mix:
             means = self.analytical_mean(
                 point_idx, freeze_params=freeze_params, mix=False
             )
 
-            var_means = np.var(means, axis=1)
-
             pis = self.Model.weights_t[:, coord[0], coord[1], :]
 
             if freeze_params:
+                sq_means = (pis@(means).T[:,-1])**2
+                means_sq = pis@(means**2).T[:,-1]
                 mean_vars = (pis @ out.T)[:, -1]
             else:
+                sq_means = (np.diag(pis@(means).T))**2
+                means_sq = np.diag(pis@(means**2).T)
                 mean_vars = np.diag(pis @ out.T)
 
-            out = mean_vars + var_means 
+            out = mean_vars + means_sq - sq_means 
         else:
             if _map: 
                 pis = self.Model.weights_t[:, coord[0], coord[1], :]
@@ -95,9 +103,11 @@ class Posterior:
                 out[:, t] = pis @ vec.T
 
         else:
+            self.pis = []
             for t in range(self.T):
                 vec = self._pointwise_posterior_t(point_idx, t)
                 pis = self.Model.weights_t[t, coord[0], coord[1], :]
+                self.pis.append(pis)
                 out[:, t] = pis @ vec.T
 
         return out
