@@ -28,8 +28,6 @@ class Posterior:
     def set_spike_count_multiplier(self,c):
         self.sc = c
 
-
-
     def analytical_mean(self, point_idx, freeze_params=False, mix=True, _map=False):
         coord = self.points[point_idx]
         x = self.Model.data_pca[coord[0], coord[1], 6]
@@ -53,6 +51,27 @@ class Posterior:
 
         return out*self.sc
 
+    def _analytical_mean(self, coord, freeze_params=False, mix=True, _map=False):
+        x = self.Model.data_pca[coord[0], coord[1], 6]
+        beta = self.dofs_t / 2
+        x = x - self.means_t
+        gamma_term = gamma((self.dofs_t / 2) + 1) / gamma((self.dofs_t / 2) + 1 / 2)
+
+        out = (((beta / x**2) + (1 / (2 * self.vars_t))) ** (-1 / 2)) * gamma_term
+
+        if mix:
+            pis = self.Model.weights_t[:, coord[0], coord[1], :]
+
+            if freeze_params:
+                out = (pis @ out.T)[:, -1]
+            else:
+                out = np.diag(pis @ out.T)
+        else:
+            if _map:
+                pis = self.Model.weights_t[:, coord[0], coord[1], :]
+                out = np.diag(out[:,pis.argmax(1)])
+
+        return out*self.sc
     def analytical_var(self, point_idx, freeze_params=False, mix=True, _map=False):
         coord = self.points[point_idx]
         x = self.Model.data_pca[coord[0], coord[1], 6]
