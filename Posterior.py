@@ -90,9 +90,7 @@ class Posterior:
         out = first_term * (gamma_term1 - (gamma_term2)) * (self.sc**2)
 
         if mix:
-            means = self.analytical_mean(
-                point_idx, freeze_params=freeze_params, mix=False
-            )
+            means = self._analytical_mean(coord, freeze_params=freeze_params, mix=False)
 
             pis = self.Model.weights_t[:, coord[0], coord[1], :]
 
