@@ -52,10 +52,14 @@ class Posterior:
 
         return out * self.sc
 
-    def _analytical_mean(self, coord, freeze_params=False, mix=True, _map=False):
+    def _analytical_mean(
+        self, coord, freeze_params=False, mix=True, _map=False, include_transient=True
+    ):
         x = self.Model.data_pca[coord[0], coord[1], 6]
         beta = self.dofs_t / 2
         x = x - self.means_t
+        if include_transient:
+            x[0] = self.Model.data_pca[:, :, 6].mean()
         gamma_term = gamma((self.dofs_t / 2) + 1) / gamma((self.dofs_t / 2) + 1 / 2)
 
         out = (((beta / x**2) + (1 / (2 * self.vars_t))) ** (-1 / 2)) * gamma_term
@@ -74,10 +78,14 @@ class Posterior:
 
         return out * self.sc
 
-    def _analytical_var(self, coord, freeze_params=False, mix=True, _map=False):
+    def _analytical_var(
+        self, coord, freeze_params=False, mix=True, _map=False, include_transient=True
+    ):
         x = self.Model.data_pca[coord[0], coord[1], 6]
         beta = self.dofs_t / 2
         x = x - self.means_t
+        if include_transient:
+            x[0] = self.Model.data_pca[:, :, 6].mean()
 
         first_term = ((beta / x**2) + (1 / (2 * self.vars_t))) ** (-1)
         gamma_term1 = gamma((self.dofs_t / 2) + (3 / 2)) / gamma(
